@@ -1,0 +1,23 @@
+id = "deck"
+name = "Deck"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Card-style workspace navigator"
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+[[actions]]
+id = "open"
+title = "Open deck navigator"
+contexts = ["workspace"]
+command = ["sh", "open.sh"]
+
+[[panes]]
+id = "picker"
+title = "Deck"
+command = ["sh", "run.sh"]
+
+# NOTE: herdr reads keybindings from the user's ~/.config/herdr/config.toml,
+# not from plugin manifests. See README for the [[keys.command]] snippet.

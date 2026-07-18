@@ -1,35 +1,50 @@
-# Deck — card-style workspace navigator for [herdr](https://herdr.dev)
+# Deck — fast workspace & pane navigator for [herdr](https://herdr.dev)
 
-Replaces herdr's flat workspace/tab/pane list with a horizontal **deck of workspace
-cards**. Each card is a status dashboard: a rollup of agent-state counts and a colored
-"worst-status" stripe, so a workspace with a **blocked** agent is spottable across the
-whole deck without entering it.
+herdr's built-in navigator is a single flat list of every workspace → tab → pane. With
+5+ workspaces and lots of panes that means a lot of scrolling. **Deck** replaces it with a
+navigator built to reach any pane fast **without scrolling**:
 
-```
-      ╭─ api ◆ ──────────╮   ╭─ web ────────────╮   ╭─ infra ──────────╮
-      ┃ ◉0 ◍2 ●1 ✓1      │   ┃ ◉1 ◍2 ●0 ✓1      │   ┃ ◉0 ◍0 ●0 ✓1      │
-      ┃  workspace       │   ┃  workspace       │   ┃  workspace       │
-      ┃ ▸ server         │   ┃ ▸ dev            │   ┃ ▸ shell          │
-      ┃   ✓ pane 1       │   ┃   ✓ pane 2       │   ┃   ✓ pane 4       │
-      ┃ ▸ build          │   ┃ ▸ worker         │   ┃ ▸ editor         │
-      ┃   ◍ pane 2       │   ┃   ◍ pane 3       │   ┃   ○ nvim         │
-      ┃ ▸ test           │   ┃ ▸ debug          │   ╰──────────────────╯
-      ┃  «● pane 8»      │   ┃   ◉ pane 7       │
-      ┃   ◍ pane 9       │   ┃   ◍ pane 8       │
-      ╰──────────────────╯   ╰──────────────────╯
-        ▲ active card          ▲ ┃ stripe is red: a blocked agent lives here
-        «…» selected row
-
-      enter switch   ← → workspace   ↑ ↓ pane   b/w/i/d filter   esc close
-```
+- a **rail** of all your workspaces (never scrolls — jump to any with `1`–`9`),
+- a **focus pane** showing only the selected workspace's tabs & panes (short list),
+- **`/` search** across every pane in every workspace, with live results.
 
 ```
-  ← / →   move between workspaces (cards)
-  ↑ / ↓   move within the active workspace (its tabs + panes)   (also j / k)
-  Enter   switch to the selected workspace / tab / pane
-  b w i d  filter by agent state (blocked / working / idle / done)
-  Esc     close
+ / press / to search · 1–9 to jump                        22 panes
+ ─────────────────────────────────────────────────────────────────
+ WORKSPACES               │ load-generator          ◉0 ◍1 ●0 ✓1
+ 1 ● esd            5     │ ▸ lg-runner
+▎2 ● load-generator 2    │   ▎✓ loadtest agent
+ 3 ● noc            2     │ ▸ deploy
+ 4 ● infra          3     │    ◍ terraform
+ 5 ● web            4     │
+ ─────────────────────────────────────────────────────────────────
+ 1–9 workspace   ↑ ↓ pane   / search   ↵ switch   esc close
 ```
+
+Press `/` and type to jump straight to a pane anywhere:
+
+```
+ / tf                                                      22 panes
+ ─────────────────────────────────────────────────────────────────
+ ▎◍ terraform             infra ▸ deploy
+  ◉ tf-plan               infra ▸ tf-plan
+ ─────────────────────────────────────────────────────────────────
+ type to filter   ↑ ↓ select   ↵ switch   esc back
+```
+
+## Keys
+
+```
+ 1–9    jump straight to a workspace
+ ↑ / ↓  move through the focused workspace's panes   (also j / k)
+ ← / →  step to the previous / next workspace         (also h / l)
+ /      search every pane across all workspaces; then type · ↑/↓ · Enter
+ Enter  switch to the selected pane
+ Esc    close   (in search mode: back to browsing)
+```
+
+The rail shows every workspace with a status dot colored by its **worst** agent state, so
+a workspace with a blocked agent (`●` red) stands out at a glance.
 
 ## Install
 
@@ -61,10 +76,10 @@ manifest. Add this block, then reload with `herdr server reload-config`:
 
 ```toml
 [[keys.command]]
-key = "prefix+d"          # Ctrl b, then d  ("d" for deck)
+key = "prefix+d"          # Ctrl b, then d
 type = "plugin_action"
 command = "deck.open"
-description = "card navigator (deck)"
+description = "workspace navigator"
 ```
 
 `prefix+g` is herdr's built-in navigator and takes precedence, so pick a free key —
@@ -81,13 +96,14 @@ herdr plugin pane open --plugin deck --entrypoint picker --placement overlay
 
 herdr launches the `herdr-deck` binary in an **overlay pane** (a temporary full-screen
 pane that restores your previous view on close). The binary reads `session.snapshot` over
-herdr's socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders the deck with
-[ratatui](https://ratatui.rs), and on `Enter` issues `workspace.focus` / `tab.focus` /
-`pane.focus` before exiting.
+herdr's socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders with
+[ratatui](https://ratatui.rs), and on `Enter` issues `pane.focus` (or `workspace.focus`)
+before exiting. Colors follow **your herdr theme** — it reads `~/.config/herdr/config.toml`
+and matches your active light/dark theme, falling back to Catppuccin.
 
-> Plugin v1 does not allow native in-app UI, so Deck is a self-drawn terminal pane rather
-> than a replacement for herdr's built-in overlay. herdr 0.7.x has no `popup` placement,
-> so it uses `overlay`. Functionally it's the same: full-screen, same keys, closes on exit.
+> Plugin v1 doesn't allow native in-app UI, so Deck is a self-drawn terminal pane rather
+> than part of herdr's own overlay. It renders transparent, so a translucent terminal
+> shows your background through it.
 
 ## Status glyphs
 
@@ -99,22 +115,20 @@ herdr's socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders the deck w
 | idle | `✓` green | idle / seen |
 | unknown | `○` grey | plain shell |
 
-The card header shows the per-state counts (`◉n ◍n ●n ✓n`); the left stripe is colored by
-the **worst** status in that workspace (blocked ▸ working ▸ done ▸ idle).
-
 ## Troubleshooting
 
-- **`Ctrl b, d` opens the built-in list** — your key still maps to herdr's navigator. Make
-  sure the `[[keys.command]]` block is in `~/.config/herdr/config.toml` and you ran
+- **`Ctrl b, d` opens the built-in list** — your key still maps to herdr's navigator.
+  Make sure the `[[keys.command]]` block is in `~/.config/herdr/config.toml` and you ran
   `herdr server reload-config`.
 - **Nothing opens / it flashes closed** — check the plugin's stderr:
   `herdr plugin log list --plugin deck`.
 - **Requires herdr ≥ 0.7.0.**
 
-## Not yet (v1 scope)
+## Not yet
 
-Free-text search box (state filters ship in v1), live event-stream refresh (renders a
-point-in-time snapshot), Windows named-pipe transport, and per-pane titles (shows `pane N`).
+Per-pane preview (recent output / cwd / git branch in the focus pane), live event-stream
+refresh (renders a point-in-time snapshot), and a Windows named-pipe transport
+(macOS/Linux only for now).
 
 ## License
 

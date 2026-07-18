@@ -108,7 +108,6 @@ pub struct Pane {
     pub is_current: bool,
 }
 pub struct Tab {
-    pub id: String,
     pub label: String,
     pub panes: Vec<Pane>,
 }
@@ -173,7 +172,6 @@ pub fn build_deck(json: &str, ctx: &Context) -> Result<Deck> {
                 });
             }
             tabs.push(Tab {
-                id: t.tab_id.clone(),
                 label: t.label.clone(),
                 panes,
             });

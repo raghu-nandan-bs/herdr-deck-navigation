@@ -1,18 +1,15 @@
 use crate::model::{Deck, Workspace};
-use crate::theme::Status;
 use crossterm::event::KeyCode;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Row {
-    Workspace,
-    Tab(usize),
-    Pane(usize, usize),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Browse,
+    Search,
 }
 
 #[derive(Debug)]
 pub enum FocusTarget {
     Workspace(String),
-    Tab(String),
     Pane(String),
 }
 
@@ -23,21 +20,49 @@ pub enum Outcome {
     Quit,
 }
 
-pub fn workspace_rows(ws: &Workspace) -> Vec<Row> {
-    let mut rows = vec![Row::Workspace];
+/// A pane located within the whole deck (workspace / tab / pane indices).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Loc {
+    pub wi: usize,
+    pub ti: usize,
+    pub pi: usize,
+}
+
+/// Flat (tab_idx, pane_idx) list of a workspace's panes, in display order.
+pub fn workspace_panes(ws: &Workspace) -> Vec<(usize, usize)> {
+    let mut v = Vec::new();
     for (ti, tab) in ws.tabs.iter().enumerate() {
-        rows.push(Row::Tab(ti));
         for pi in 0..tab.panes.len() {
-            rows.push(Row::Pane(ti, pi));
+            v.push((ti, pi));
         }
     }
-    rows
+    v
+}
+
+/// Every pane across the deck matching `query` (substring over workspace/tab/pane
+/// labels). Empty query returns all panes.
+pub fn search_results(deck: &Deck, query: &str) -> Vec<Loc> {
+    let q = query.trim().to_lowercase();
+    let mut out = Vec::new();
+    for (wi, w) in deck.workspaces.iter().enumerate() {
+        for (ti, tab) in w.tabs.iter().enumerate() {
+            for (pi, pane) in tab.panes.iter().enumerate() {
+                let hay = format!("{} {} {}", w.label, tab.label, pane.label).to_lowercase();
+                if q.is_empty() || hay.contains(&q) {
+                    out.push(Loc { wi, ti, pi });
+                }
+            }
+        }
+    }
+    out
 }
 
 pub struct NavState {
-    pub active: usize,
-    pub sel: Vec<usize>,
-    pub filter: Option<Status>,
+    pub active: usize,     // selected workspace (the rail)
+    pub sel: Vec<usize>,   // selected pane index (into workspace_panes) per workspace
+    pub mode: Mode,
+    pub query: String,
+    pub result_sel: usize, // selected row in the search results
 }
 
 impl NavState {
@@ -51,76 +76,120 @@ impl NavState {
             .workspaces
             .iter()
             .map(|w| {
-                // start on the current pane's row if present, else row 0
-                workspace_rows(w)
+                workspace_panes(w)
                     .iter()
-                    .position(|r| matches!(r, Row::Pane(ti, pi) if w.tabs[*ti].panes[*pi].is_current))
+                    .position(|&(ti, pi)| w.tabs[ti].panes[pi].is_current)
                     .unwrap_or(0)
             })
             .collect();
         NavState {
             active,
             sel,
-            filter: None,
-        }
-    }
-
-    fn active_row_count(&self, deck: &Deck) -> usize {
-        workspace_rows(&deck.workspaces[self.active]).len()
-    }
-
-    pub fn selected_target(&self, deck: &Deck) -> Option<FocusTarget> {
-        let ws = deck.workspaces.get(self.active)?;
-        let rows = workspace_rows(ws);
-        match rows.get(self.sel[self.active])? {
-            Row::Workspace => Some(FocusTarget::Workspace(ws.id.clone())),
-            Row::Tab(ti) => Some(FocusTarget::Tab(ws.tabs[*ti].id.clone())),
-            Row::Pane(ti, pi) => Some(FocusTarget::Pane(ws.tabs[*ti].panes[*pi].id.clone())),
+            mode: Mode::Browse,
+            query: String::new(),
+            result_sel: 0,
         }
     }
 
     pub fn on_key(&mut self, deck: &Deck, code: KeyCode) -> Outcome {
+        match self.mode {
+            Mode::Browse => self.on_browse_key(deck, code),
+            Mode::Search => self.on_search_key(deck, code),
+        }
+    }
+
+    fn on_browse_key(&mut self, deck: &Deck, code: KeyCode) -> Outcome {
         match code {
+            KeyCode::Char('/') => {
+                self.mode = Mode::Search;
+                self.query.clear();
+                self.result_sel = 0;
+                Outcome::Redraw
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let i = c as usize - '1' as usize;
+                if i < deck.workspaces.len() {
+                    self.active = i;
+                }
+                Outcome::Redraw
+            }
             KeyCode::Left | KeyCode::Char('h') => {
                 self.active = self.active.saturating_sub(1);
-                self.clamp_sel(deck);
                 Outcome::Redraw
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 self.active = (self.active + 1).min(deck.workspaces.len().saturating_sub(1));
-                self.clamp_sel(deck);
                 Outcome::Redraw
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let last = self.active_row_count(deck).saturating_sub(1);
-                self.sel[self.active] = (self.sel[self.active] + 1).min(last);
+                let n = workspace_panes(&deck.workspaces[self.active]).len();
+                if n > 0 {
+                    self.sel[self.active] = (self.sel[self.active] + 1).min(n - 1);
+                }
                 Outcome::Redraw
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.sel[self.active] = self.sel[self.active].saturating_sub(1);
                 Outcome::Redraw
             }
-            KeyCode::Enter => match self.selected_target(deck) {
+            KeyCode::Enter => match self.browse_target(deck) {
                 Some(t) => Outcome::Focus(t),
                 None => Outcome::Redraw,
             },
-            KeyCode::Char('b') => self.toggle(Status::Blocked),
-            KeyCode::Char('w') => self.toggle(Status::Working),
-            KeyCode::Char('d') => self.toggle(Status::Done),
-            KeyCode::Char('i') => self.toggle(Status::Idle),
             KeyCode::Esc => Outcome::Quit,
             _ => Outcome::Redraw,
         }
     }
 
-    fn toggle(&mut self, s: Status) -> Outcome {
-        self.filter = if self.filter == Some(s) { None } else { Some(s) };
-        Outcome::Redraw
+    fn browse_target(&self, deck: &Deck) -> Option<FocusTarget> {
+        let w = deck.workspaces.get(self.active)?;
+        let panes = workspace_panes(w);
+        match panes.get(self.sel.get(self.active).copied().unwrap_or(0)) {
+            Some(&(ti, pi)) => Some(FocusTarget::Pane(w.tabs[ti].panes[pi].id.clone())),
+            None => Some(FocusTarget::Workspace(w.id.clone())), // empty workspace
+        }
     }
 
-    fn clamp_sel(&mut self, deck: &Deck) {
-        let last = self.active_row_count(deck).saturating_sub(1);
-        self.sel[self.active] = self.sel[self.active].min(last);
+    fn on_search_key(&mut self, deck: &Deck, code: KeyCode) -> Outcome {
+        match code {
+            KeyCode::Esc => {
+                self.mode = Mode::Browse;
+                self.query.clear();
+                Outcome::Redraw
+            }
+            KeyCode::Enter => {
+                let hits = search_results(deck, &self.query);
+                match hits.get(self.result_sel) {
+                    Some(loc) => {
+                        let id = deck.workspaces[loc.wi].tabs[loc.ti].panes[loc.pi].id.clone();
+                        Outcome::Focus(FocusTarget::Pane(id))
+                    }
+                    None => Outcome::Redraw,
+                }
+            }
+            KeyCode::Down => {
+                let n = search_results(deck, &self.query).len();
+                if n > 0 {
+                    self.result_sel = (self.result_sel + 1).min(n - 1);
+                }
+                Outcome::Redraw
+            }
+            KeyCode::Up => {
+                self.result_sel = self.result_sel.saturating_sub(1);
+                Outcome::Redraw
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.result_sel = 0;
+                Outcome::Redraw
+            }
+            KeyCode::Char(c) => {
+                self.query.push(c);
+                self.result_sel = 0;
+                Outcome::Redraw
+            }
+            _ => Outcome::Redraw,
+        }
     }
 }
 
@@ -132,106 +201,114 @@ mod tests {
 
     const MINI: &str = r#"
     {"id":"x","result":{"type":"session_snapshot","snapshot":{
-      "focused_workspace_id":"w2","focused_tab_id":"w2:t1","focused_pane_id":"w2:p1",
+      "focused_workspace_id":"w2","focused_pane_id":"w2:p1",
       "workspaces":[
-        {"workspace_id":"w1","label":"api","number":1,"active_tab_id":"w1:t1"},
-        {"workspace_id":"w2","label":"web","number":2,"active_tab_id":"w2:t1"}
+        {"workspace_id":"w1","label":"api","number":1},
+        {"workspace_id":"w2","label":"web","number":2},
+        {"workspace_id":"w3","label":"infra","number":3}
       ],
       "tabs":[
         {"tab_id":"w1:t1","workspace_id":"w1","label":"server","number":1},
-        {"tab_id":"w2:t1","workspace_id":"w2","label":"ui","number":1}
+        {"tab_id":"w2:t1","workspace_id":"w2","label":"ui","number":1},
+        {"tab_id":"w3:t1","workspace_id":"w3","label":"shell","number":1}
       ],
       "panes":[
-        {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle"},
-        {"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","agent_status":"working"}
+        {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle","label":"loadtest agent"},
+        {"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","agent_status":"working"},
+        {"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","agent_status":"working"},
+        {"pane_id":"w3:p1","tab_id":"w3:t1","workspace_id":"w3","agent_status":"blocked"}
       ]
     }}}"#;
 
+    fn deck() -> Deck {
+        build_deck(MINI, &Context::default()).unwrap()
+    }
+
     #[test]
     fn starts_on_current_workspace() {
-        let deck = build_deck(MINI, &Context::default()).unwrap();
-        let st = NavState::new(&deck);
-        assert_eq!(st.active, 1); // w2 is focused
+        let st = NavState::new(&deck());
+        assert_eq!(st.active, 1); // w2 focused
     }
 
     #[test]
-    fn rows_start_with_workspace_then_tabs_and_panes() {
-        let deck = build_deck(MINI, &Context::default()).unwrap();
-        let rows = workspace_rows(&deck.workspaces[0]);
-        assert_eq!(rows[0], Row::Workspace);
-        assert_eq!(rows[1], Row::Tab(0));
-        assert_eq!(rows[2], Row::Pane(0, 0));
-    }
-
-    #[test]
-    fn left_right_move_between_cards_clamped() {
-        let deck = build_deck(MINI, &Context::default()).unwrap();
-        let mut st = NavState::new(&deck);
-        st.active = 1;
-        assert!(matches!(st.on_key(&deck, KeyCode::Left), Outcome::Redraw));
+    fn number_key_jumps_workspace() {
+        let d = deck();
+        let mut st = NavState::new(&d);
+        st.on_key(&d, KeyCode::Char('3'));
+        assert_eq!(st.active, 2);
+        st.on_key(&d, KeyCode::Char('1'));
         assert_eq!(st.active, 0);
-        st.on_key(&deck, KeyCode::Left); // clamp at 0
+        st.on_key(&d, KeyCode::Char('9')); // out of range, ignored
         assert_eq!(st.active, 0);
-        st.on_key(&deck, KeyCode::Right);
-        assert_eq!(st.active, 1);
     }
 
     #[test]
-    fn right_past_last_workspace_clamps_active() {
-        let deck = build_deck(MINI, &Context::default()).unwrap();
-        let mut st = NavState::new(&deck);
-        st.active = 1; // last workspace (w2)
-        st.on_key(&deck, KeyCode::Right); // clamp at len-1 == 1
-        assert_eq!(st.active, 1);
-        st.on_key(&deck, KeyCode::Right); // still clamped
-        assert_eq!(st.active, 1);
-    }
-
-    #[test]
-    fn up_down_move_within_active_card_clamped() {
-        let deck = build_deck(MINI, &Context::default()).unwrap();
-        let mut st = NavState::new(&deck);
-        st.active = 0;
+    fn down_moves_through_panes_clamped() {
+        let d = deck();
+        let mut st = NavState::new(&d);
+        st.active = 0; // api has 2 panes
         st.sel[0] = 0;
-        st.on_key(&deck, KeyCode::Down);
+        st.on_key(&d, KeyCode::Down);
         assert_eq!(st.sel[0], 1);
-        st.on_key(&deck, KeyCode::Char('j'));
-        assert_eq!(st.sel[0], 2);
-        // clamp at last row (3 rows: ws, tab, pane)
-        st.on_key(&deck, KeyCode::Down);
-        assert_eq!(st.sel[0], 2);
-        st.on_key(&deck, KeyCode::Up);
+        st.on_key(&d, KeyCode::Down); // clamp
         assert_eq!(st.sel[0], 1);
+        st.on_key(&d, KeyCode::Up);
+        assert_eq!(st.sel[0], 0);
     }
 
     #[test]
-    fn enter_on_pane_focuses_that_pane() {
-        let deck = build_deck(MINI, &Context::default()).unwrap();
-        let mut st = NavState::new(&deck);
+    fn enter_focuses_selected_pane() {
+        let d = deck();
+        let mut st = NavState::new(&d);
         st.active = 0;
-        st.sel[0] = 2; // the pane row
-        match st.on_key(&deck, KeyCode::Enter) {
-            Outcome::Focus(FocusTarget::Pane(id)) => assert_eq!(id, "w1:p1"),
+        st.sel[0] = 1; // w1:p2
+        match st.on_key(&d, KeyCode::Enter) {
+            Outcome::Focus(FocusTarget::Pane(id)) => assert_eq!(id, "w1:p2"),
             other => panic!("expected pane focus, got {other:?}"),
         }
     }
 
     #[test]
-    fn enter_on_workspace_row_focuses_workspace() {
-        let deck = build_deck(MINI, &Context::default()).unwrap();
-        let mut st = NavState::new(&deck);
-        st.active = 0;
-        st.sel[0] = 0;
-        match st.on_key(&deck, KeyCode::Enter) {
-            Outcome::Focus(FocusTarget::Workspace(id)) => assert_eq!(id, "w1"),
-            other => panic!("expected ws focus, got {other:?}"),
+    fn slash_enters_search_and_typing_filters() {
+        let d = deck();
+        let mut st = NavState::new(&d);
+        st.on_key(&d, KeyCode::Char('/'));
+        assert_eq!(st.mode, Mode::Search);
+        for c in "loadtest".chars() {
+            st.on_key(&d, KeyCode::Char(c));
         }
+        let hits = search_results(&d, &st.query);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0], Loc { wi: 0, ti: 0, pi: 0 });
     }
 
     #[test]
-    fn esc_quits() {
-        let deck = build_deck(MINI, &Context::default()).unwrap();
-        let mut st = NavState::new(&deck);
-        assert!(matches!(st.on_key(&deck, KeyCode::Esc), Outcome::Quit));
+    fn search_enter_focuses_the_hit_then_esc_exits() {
+        let d = deck();
+        let mut st = NavState::new(&d);
+        st.on_key(&d, KeyCode::Char('/'));
+        for c in "blocked".chars() {
+            st.on_key(&d, KeyCode::Char(c));
+        }
+        // "blocked" matches no label text; broaden to something that hits infra's pane
+        st.query.clear();
+        for c in "infra".chars() {
+            st.on_key(&d, KeyCode::Char(c));
+        }
+        match st.on_key(&d, KeyCode::Enter) {
+            Outcome::Focus(FocusTarget::Pane(id)) => assert_eq!(id, "w3:p1"),
+            other => panic!("expected pane focus, got {other:?}"),
+        }
+        // re-enter search then esc returns to browse
+        st.on_key(&d, KeyCode::Char('/'));
+        st.on_key(&d, KeyCode::Esc);
+        assert_eq!(st.mode, Mode::Browse);
+    }
+
+    #[test]
+    fn esc_in_browse_quits() {
+        let d = deck();
+        let mut st = NavState::new(&d);
+        assert!(matches!(st.on_key(&d, KeyCode::Esc), Outcome::Quit));
     }
 }

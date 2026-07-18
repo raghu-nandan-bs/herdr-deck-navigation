@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>herdr · Deck — rail + focus navigator</title>
+<style>
+  :root{
+    --bg:#1a1b26; --panel:#1f2133; --line:#2b2e44; --line2:#3a3e5c;
+    --text:#c8d0f0; --dim:#7a80a4; --dim2:#565b7e;
+    --accent:#f6a06a; --accent-soft:rgba(246,160,106,.16);
+    --red:#f7768e; --yellow:#e0af68; --teal:#73daca; --green:#9ece6a; --grey:#565f89;
+    --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--mono);background:#0e0f18;color:var(--text);
+    display:flex;align-items:center;justify-content:center;padding:26px;font-size:13.5px;-webkit-font-smoothing:antialiased}
+
+  .term{width:min(1080px,100%);background:var(--bg);border:1px solid #26283a;border-radius:12px;
+    overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5);display:flex;flex-direction:column;height:560px}
+  .bar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);color:var(--dim);background:#191a28}
+  .bar .slash{color:var(--accent);font-weight:700}
+  .bar input{all:unset;flex:1;color:var(--text);caret-color:var(--accent)}
+  .bar .ph{color:var(--dim2)}
+  .bar .count{color:var(--dim2);font-size:12px}
+
+  .main{flex:1;display:grid;grid-template-columns:250px 1fr;min-height:0}
+  .rail{border-right:1px solid var(--line);padding:10px 8px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+  .rail .h{color:var(--dim2);font-size:11px;letter-spacing:.14em;padding:2px 10px 8px}
+  .ws{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;cursor:pointer}
+  .ws .num{color:var(--dim2);width:12px;text-align:center;font-size:12px}
+  .ws .nm{flex:1;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ws .dot{width:8px;height:8px;border-radius:50%}
+  .ws .pc{color:var(--dim2);font-size:11px}
+  .ws.active{background:var(--accent-soft)}
+  .ws.active .nm{color:var(--text);font-weight:600}
+  .ws.active .num{color:var(--accent);font-weight:700}
+
+  .focus{display:flex;flex-direction:column;min-height:0}
+  .fhead{display:flex;align-items:center;gap:10px;padding:12px 16px 10px;border-bottom:1px solid var(--line)}
+  .fhead .name{font-size:15px;font-weight:700;color:var(--text)}
+  .fhead .roll{margin-left:auto;display:flex;gap:10px;font-size:12px}
+  .roll .r{display:flex;align-items:center;gap:4px;color:var(--dim)}
+  .roll .r.z{opacity:.35}
+  .fbody{flex:1;overflow-y:auto;padding:8px 10px}
+  .tab{display:flex;align-items:center;gap:8px;padding:6px 10px;color:var(--text);font-weight:600}
+  .tab .chev{color:var(--dim2);font-size:11px}
+  .tab .tmeta{margin-left:auto;color:var(--dim2);font-size:11px}
+  .pane{display:flex;align-items:center;gap:9px;padding:6px 10px 6px 30px;border-radius:8px;color:var(--dim)}
+  .pane .g{width:12px;text-align:center}
+  .pane .lbl{color:var(--text)}
+  .pane .meta{margin-left:auto;color:var(--dim2);font-size:11.5px}
+  .pane.sel{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
+  .pane.sel .lbl{font-weight:700}
+
+  /* search results (flat) */
+  .results{padding:8px 10px;overflow-y:auto;flex:1}
+  .res{display:flex;align-items:center;gap:10px;padding:7px 12px;border-radius:8px;color:var(--text)}
+  .res .g{width:12px;text-align:center}
+  .res .path{margin-left:auto;color:var(--dim2);font-size:11.5px}
+  .res.sel{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
+  .hidden{display:none!important}
+
+  .g-block{color:var(--red)}.g-work{color:var(--yellow)}.g-done{color:var(--teal)}.g-idle{color:var(--green)}.g-unknown{color:var(--grey)}
+  .d-block{background:var(--red)}.d-work{background:var(--yellow)}.d-done{background:var(--teal)}.d-idle{background:var(--green)}.d-unknown{background:var(--grey)}
+
+  .foot{display:flex;gap:18px;padding:8px 16px;border-top:1px solid var(--line);color:var(--dim2);font-size:12px;flex-wrap:wrap}
+  .foot b{color:var(--accent);font-weight:700}
+  .hint{max-width:1080px;margin:14px auto 0;text-align:center;color:#565b7e;font-size:12.5px}
+  .hint kbd{font-family:var(--mono);background:#20223400;border:1px solid #33385a;border-radius:5px;padding:1px 7px;color:#9aa0c4}
+</style>
+</head>
+<body>
+<div style="width:min(1080px,100%)">
+  <div class="term">
+    <div class="bar">
+      <span class="slash">/&nbsp;</span>
+      <input id="q" placeholder="jump to a pane…  (press / to search, or 1-9 for a workspace)" autocomplete="off">
+      <span class="count" id="count"></span>
+    </div>
+    <div class="main">
+      <div class="rail" id="rail"></div>
+      <div class="focus">
+        <div class="fhead" id="fhead"></div>
+        <div class="fbody" id="fbody"></div>
+      </div>
+    </div>
+    <div class="results hidden" id="results"></div>
+    <div class="foot">
+      <span><b>1-9</b> workspace</span>
+      <span><b>↑ ↓</b> pane</span>
+      <span><b>/</b> search</span>
+      <span><b>↵</b> switch</span>
+      <span><b>esc</b> close</span>
+    </div>
+  </div>
+</div>
+<div class="hint">Live mockup — <kbd>1</kbd>–<kbd>9</kbd> jump workspace · <kbd>↑</kbd><kbd>↓</kbd> move pane · <kbd>/</kbd> search across everything · <kbd>Enter</kbd> switch</div>
+
+<script>
+const S={block:{g:"◉",c:"block"},work:{g:"◍",c:"work"},done:{g:"●",c:"done"},idle:{g:"✓",c:"idle"},unknown:{g:"○",c:"unknown"}};
+const WS=[
+  {name:"esd", tabs:[
+    {name:"1", panes:[{n:"pane 1", s:"block", m:"claude"}]},
+    {name:"code", panes:[{n:"nvim", s:"idle", m:"—"},{n:"pane 2", s:"unknown", m:"shell"}]},
+  ]},
+  {name:"load-generator", tabs:[
+    {name:"lg-runner", panes:[{n:"loadtest agent", s:"idle", m:"claude"}]},
+    {name:"deploy", panes:[{n:"terraform", s:"work", m:"apply"}]},
+  ]},
+  {name:"noc", tabs:[
+    {name:"1", panes:[{n:"pane 4", s:"idle", m:"—"}]},
+    {name:"editor", panes:[{n:"nvim", s:"unknown", m:"shell"}]},
+  ]},
+  {name:"infra", tabs:[
+    {name:"deploy", panes:[{n:"pane 1", s:"work", m:"tf"}]},
+    {name:"logs", panes:[{n:"pane 2", s:"done", m:"tail"}]},
+    {name:"tf-plan", panes:[{n:"pane 3", s:"block", m:"stuck"}]},
+  ]},
+  {name:"web", tabs:[
+    {name:"dev", panes:[{n:"vite", s:"idle", m:"5173"}]},
+    {name:"worker", panes:[{n:"queue", s:"block", m:"paused"}]},
+    {name:"api", panes:[{n:"server", s:"work", m:"cargo"}]},
+  ]},
+];
+const RANK={block:0,work:1,done:2,idle:3,unknown:4};
+function counts(w){const c={block:0,work:0,done:0,idle:0,unknown:0};w.tabs.forEach(t=>t.panes.forEach(p=>c[p.s]++));return c;}
+function worst(w){const c=counts(w);for(const k of["block","work","done","idle","unknown"])if(c[k])return k;return"unknown";}
+function paneCount(w){return w.tabs.reduce((a,t)=>a+t.panes.length,0);}
+// flat selectable rows for the focus pane: tab rows + pane rows
+function focusRows(w){const r=[];w.tabs.forEach((t,ti)=>{r.push({type:"tab",ti});t.panes.forEach((p,pi)=>r.push({type:"pane",ti,pi}));});return r;}
+// all panes flattened for search
+const ALL=[];WS.forEach((w,wi)=>w.tabs.forEach((t,ti)=>t.panes.forEach((p,pi)=>ALL.push({wi,ti,pi,ws:w.name,tab:t.name,...p}))));
+
+let active=1, sel=WS.map(w=>focusRows(w).findIndex(r=>r.type==="pane"));
+let search=false, query="";
+const rail=document.getElementById("rail"),fhead=document.getElementById("fhead"),fbody=document.getElementById("fbody"),
+      results=document.getElementById("results"),q=document.getElementById("q"),count=document.getElementById("count");
+let resSel=0;
+
+function render(){
+  count.textContent = WS.reduce((a,w)=>a+paneCount(w),0)+" panes";
+  if(search){ renderSearch(); return; }
+  results.classList.add("hidden"); document.querySelector(".main").classList.remove("hidden");
+  // rail
+  rail.innerHTML=`<div class="h">WORKSPACES</div>`;
+  WS.forEach((w,i)=>{
+    const el=document.createElement("div");el.className="ws"+(i===active?" active":"");
+    el.innerHTML=`<span class="num">${i+1}</span><span class="nm">${w.name}</span>
+      <span class="dot d-${worst(w)}"></span><span class="pc">${paneCount(w)}</span>`;
+    el.onclick=()=>{active=i;render();};
+    rail.appendChild(el);
+  });
+  // focus
+  const w=WS[active],c=counts(w);
+  fhead.innerHTML=`<span class="name">${w.name}</span>
+    <div class="roll">
+      ${rollup("block","◉",c.block)}${rollup("work","◍",c.work)}${rollup("done","●",c.done)}${rollup("idle","✓",c.idle)}
+    </div>`;
+  fbody.innerHTML="";
+  const rows=focusRows(w);
+  rows.forEach((r,ri)=>{
+    const el=document.createElement("div");
+    if(r.type==="tab"){const t=w.tabs[r.ti];el.className="tab";
+      el.innerHTML=`<span class="chev">▸</span>${t.name}<span class="tmeta">${t.panes.length}p</span>`;}
+    else{const p=w.tabs[r.ti].panes[r.pi];el.className="pane"+(ri===sel[active]?" sel":"");
+      el.innerHTML=`<span class="g g-${p.s}">${S[p.s].g}</span><span class="lbl">${p.n}</span><span class="meta">${p.m}</span>`;
+      el.onclick=()=>{sel[active]=ri;render();};}
+    fbody.appendChild(el);
+  });
+  const s=fbody.querySelector(".sel");if(s)s.scrollIntoView({block:"nearest"});
+}
+function rollup(k,g,n){return `<span class="r ${n?'':'z'}"><span class="g-${k}">${g}</span>${n}</span>`;}
+
+function renderSearch(){
+  document.querySelector(".main").classList.add("hidden");
+  results.classList.remove("hidden");
+  const ql=query.toLowerCase();
+  const hits=ALL.filter(p=>!ql||`${p.ws} ${p.tab} ${p.n} ${p.m}`.toLowerCase().includes(ql));
+  resSel=Math.min(resSel,Math.max(0,hits.length-1));
+  results.innerHTML="";
+  if(!hits.length){results.innerHTML=`<div class="res" style="color:var(--dim2)">no matches</div>`;return;}
+  hits.forEach((p,i)=>{
+    const el=document.createElement("div");el.className="res"+(i===resSel?" sel":"");
+    el.innerHTML=`<span class="g g-${p.s}">${S[p.s].g}</span><span class="lbl">${p.n}</span>
+      <span class="path">${p.ws} ▸ ${p.tab}</span>`;
+    el.onclick=()=>{resSel=i;render();};
+    results.appendChild(el);
+  });
+  const s=results.querySelector(".sel");if(s)s.scrollIntoView({block:"nearest"});
+}
+
+function move(d){const rows=focusRows(WS[active]);let i=sel[active]+d;
+  while(i>=0&&i<rows.length&&rows[i].type!=="pane")i+=d; // skip tab rows
+  if(i>=0&&i<rows.length)sel[active]=i;render();}
+
+document.addEventListener("keydown",e=>{
+  if(search){
+    if(e.key==="Escape"){search=false;query="";q.value="";q.blur();render();e.preventDefault();}
+    else if(e.key==="ArrowDown"){resSel++;renderSearch();e.preventDefault();}
+    else if(e.key==="ArrowUp"){resSel=Math.max(0,resSel-1);renderSearch();e.preventDefault();}
+    else if(e.key==="Enter"){e.preventDefault();}
+    return;
+  }
+  if(e.key==="/"){search=true;query="";resSel=0;q.value="";q.focus();q.placeholder="search panes…";render();e.preventDefault();}
+  else if(e.key>="1"&&e.key<="9"){const i=+e.key-1;if(i<WS.length){active=i;render();}e.preventDefault();}
+  else if(e.key==="ArrowDown"||e.key==="j"){move(1);e.preventDefault();}
+  else if(e.key==="ArrowUp"||e.key==="k"){move(-1);e.preventDefault();}
+  else if(e.key==="ArrowRight"||e.key==="l"){active=Math.min(active+1,WS.length-1);render();e.preventDefault();}
+  else if(e.key==="ArrowLeft"||e.key==="h"){active=Math.max(active-1,0);render();e.preventDefault();}
+});
+q.addEventListener("input",()=>{if(search){query=q.value;resSel=0;renderSearch();}});
+render();
+</script>
+</body>
+</html>

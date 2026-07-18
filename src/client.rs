@@ -56,7 +56,6 @@ pub fn snapshot(path: &Path) -> Result<String> {
 pub fn focus(path: &Path, target: &FocusTarget) -> Result<()> {
     let (method, params) = match target {
         FocusTarget::Workspace(id) => ("workspace.focus", json!({ "workspace_id": id })),
-        FocusTarget::Tab(id) => ("tab.focus", json!({ "tab_id": id })),
         FocusTarget::Pane(id) => ("pane.focus", json!({ "pane_id": id })),
     };
     call(path, method, params)?;

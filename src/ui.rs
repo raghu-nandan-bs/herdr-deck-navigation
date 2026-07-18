@@ -2,18 +2,14 @@ use crate::model::{Deck, Workspace};
 use crate::state::{workspace_rows, NavState, Row};
 use crate::theme::Palette;
 use ratatui::{
-    layout::Rect,
+    layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 
-const CARD_W: u16 = 44;
-const NB_GAP: u16 = 2; // gap between fanned neighbour cards
-const NB_SHRINK: u16 = 7; // each neighbour is this much narrower than the last
-const NB_MIN: u16 = 16; // smallest neighbour width worth drawing
-const MAX_SIDE: usize = 3; // how many neighbours to fan per side
+const CARD_W: u16 = 46;
 
 /// Rows a card needs: 2 borders + rollup line + one row per selectable row.
 fn card_height(ws: &Workspace, max: u16) -> u16 {
@@ -30,77 +26,19 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
         return;
     }
 
-    let top = Rect::new(area.x, area.y, area.width, 1);
+    let switcher = Rect::new(area.x, area.y, area.width, 1);
     let footer = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
-    let body = Rect::new(area.x, area.y + 1, area.width, area.height - 2);
+    let body = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(3));
 
-    let cw = CARD_W.min(body.width);
+    render_switcher(frame, switcher, deck, st, p);
+
+    // one card, centered and fixed; navigating just swaps its contents
     let front = &deck.workspaces[st.active];
+    let cw = CARD_W.min(body.width);
     let ch = card_height(front, body.height);
     let cx = body.x + (body.width - cw) / 2;
-    let cy = body.y + (body.height - ch) / 2;
-
-    // Upcoming workspaces fan out to the LEFT (dimmer + smaller), already-seen
-    // ones to the RIGHT. They sit beside the front card (no overlap), so the
-    // glass/transparent fill stays clean.
-    let mut left_edge = cx;
-    for d in 1..=MAX_SIDE {
-        let Some(ws) = deck.workspaces.get(st.active + d) else {
-            break;
-        };
-        let w = cw.saturating_sub(d as u16 * NB_SHRINK).max(NB_MIN);
-        let h = ch.saturating_sub(d as u16 * 2).max(5);
-        let Some(x) = left_edge.checked_sub(NB_GAP + w) else {
-            break;
-        };
-        if x < body.x {
-            break;
-        }
-        let y = body.y + (body.height - h) / 2;
-        render_neighbor(frame, Rect::new(x, y, w, h), ws, p);
-        left_edge = x;
-    }
-    let mut right_edge = cx + cw;
-    for d in 1..=MAX_SIDE {
-        if st.active < d {
-            break;
-        }
-        let Some(ws) = deck.workspaces.get(st.active - d) else {
-            break;
-        };
-        let w = cw.saturating_sub(d as u16 * NB_SHRINK).max(NB_MIN);
-        let h = ch.saturating_sub(d as u16 * 2).max(5);
-        let x = right_edge + NB_GAP;
-        if x + w > body.x + body.width {
-            break;
-        }
-        let y = body.y + (body.height - h) / 2;
-        render_neighbor(frame, Rect::new(x, y, w, h), ws, p);
-        right_edge = x + w;
-    }
-
+    let cy = body.y + (body.height.saturating_sub(ch)) / 2;
     render_card(frame, Rect::new(cx, cy, cw, ch), front, st, p);
-
-    // top counter / position
-    let mut head = vec![];
-    if st.active > 0 {
-        head.push(Span::styled("‹  ", Style::default().fg(p.overlay0)));
-    }
-    head.push(Span::styled(
-        front.label.clone(),
-        Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-    ));
-    head.push(Span::styled(
-        format!("   {} of {}", st.active + 1, deck.workspaces.len()),
-        Style::default().fg(p.overlay0),
-    ));
-    if st.active + 1 < deck.workspaces.len() {
-        head.push(Span::styled("  ›", Style::default().fg(p.overlay0)));
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(head)).alignment(ratatui::layout::Alignment::Center),
-        top,
-    );
 
     let hint = Line::from(vec![
         key("↵", p), dim(" switch   ", p),
@@ -109,27 +47,66 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
         key("b/w/i/d", p), dim(" filter   ", p),
         key("esc", p), dim(" close", p),
     ]);
+    frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), footer);
+}
+
+/// A herdr-tab-strip-style switcher: every workspace as a status dot + name,
+/// the active one highlighted. Gives at-a-glance health across all workspaces.
+fn render_switcher(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Palette) {
+    let mut spans = Vec::new();
+    for (i, ws) in deck.workspaces.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("   ", Style::default().fg(p.overlay0)));
+        }
+        spans.push(Span::styled(
+            format!("{} ", ws.worst.glyph()),
+            Style::default().fg(ws.worst.color(p)),
+        ));
+        let name = truncate(&ws.label, 18);
+        let style = if i == st.active {
+            Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(p.overlay0)
+        };
+        spans.push(Span::styled(name, style));
+    }
     frame.render_widget(
-        Paragraph::new(hint).alignment(ratatui::layout::Alignment::Center),
-        footer,
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+        area,
     );
 }
 
-/// A dimmed, compact neighbour card in the fan: rounded border, name, worst-status
-/// stripe, rollup, and its tab list — enough to read as another workspace card.
-fn render_neighbor(frame: &mut Frame, rect: Rect, ws: &Workspace, p: &Palette) {
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+fn render_card(frame: &mut Frame, rect: Rect, ws: &Workspace, st: &NavState, p: &Palette) {
     let title = Line::from(vec![
         Span::raw(" "),
+        if ws.is_current {
+            Span::styled("◆ ", Style::default().fg(p.accent))
+        } else {
+            Span::raw("")
+        },
         Span::styled(
             ws.label.clone(),
-            Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD),
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
     ]);
+    // No background fill: the card is transparent so the terminal's (blurred)
+    // wallpaper shows through it — a frosted-glass feel. Only the border, text,
+    // stripe, and the selected-row highlight paint pixels.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(p.overlay0))
+        .border_style(Style::default().fg(p.accent))
         .title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
@@ -137,7 +114,7 @@ fn render_neighbor(frame: &mut Frame, rect: Rect, ws: &Workspace, p: &Palette) {
         return;
     }
 
-    // worst-status stripe
+    // worst-status stripe on the inner-left edge
     let bar: Vec<Line> = (0..inner.height)
         .map(|_| Line::from(Span::styled("▌", Style::default().fg(ws.worst.color(p)))))
         .collect();
@@ -158,80 +135,6 @@ fn render_neighbor(frame: &mut Frame, rect: Rect, ws: &Workspace, p: &Palette) {
         Rect::new(content.x, content.y, content.width, 1),
     );
 
-    // dim tab list to give the card substance
-    let tabs: Vec<Line> = ws
-        .tabs
-        .iter()
-        .map(|t| {
-            Line::from(Span::styled(
-                format!(" ▸ {}", t.label),
-                Style::default().fg(p.overlay0),
-            ))
-        })
-        .collect();
-    frame.render_widget(
-        Paragraph::new(tabs),
-        Rect::new(
-            content.x,
-            content.y + 1,
-            content.width,
-            content.height.saturating_sub(1),
-        ),
-    );
-}
-
-fn render_card(frame: &mut Frame, rect: Rect, ws: &Workspace, st: &NavState, p: &Palette) {
-    let title = Line::from(vec![
-        Span::raw(" "),
-        if ws.is_current {
-            Span::styled("◆ ", Style::default().fg(p.accent))
-        } else {
-            Span::raw("")
-        },
-        Span::styled(
-            ws.label.clone(),
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-    ]);
-    // No background fill: the card is transparent so the terminal's (blurred)
-    // wallpaper shows through it — real frosted glass. Only the border, text,
-    // stripe, and the selected-row highlight paint pixels.
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(p.accent))
-        .title(title);
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
-    if inner.height == 0 || inner.width < 2 {
-        return;
-    }
-
-    // worst-status stripe on the inner-left edge
-    let stripe = Rect::new(inner.x, inner.y, 1, inner.height);
-    let bar: Vec<Line> = (0..inner.height)
-        .map(|_| Line::from(Span::styled("▌", Style::default().fg(ws.worst.color(p)))))
-        .collect();
-    frame.render_widget(Paragraph::new(bar), stripe);
-    let content = Rect::new(inner.x + 1, inner.y, inner.width - 1, inner.height);
-
-    // rollup line
-    let rollup = Line::from(vec![
-        rollup_span(p.red, "◉", ws.counts.blocked, p),
-        Span::raw(" "),
-        rollup_span(p.yellow, "◍", ws.counts.working, p),
-        Span::raw(" "),
-        rollup_span(p.teal, "●", ws.counts.done, p),
-        Span::raw(" "),
-        rollup_span(p.green, "✓", ws.counts.idle, p),
-    ]);
-    frame.render_widget(
-        Paragraph::new(rollup),
-        Rect::new(content.x, content.y, content.width, 1),
-    );
-
-    // rows
     let rows = workspace_rows(ws);
     let sel = st.sel.get(st.active).copied().unwrap_or(0);
     let list = Rect::new(
@@ -250,18 +153,19 @@ fn render_card(frame: &mut Frame, rect: Rect, ws: &Workspace, st: &NavState, p: 
 
 fn render_row(ws: &Workspace, row: &Row, selected: bool, st: &NavState, p: &Palette) -> Line<'static> {
     let base = if selected {
-        Style::default().bg(p.accent).fg(p.panel_bg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .bg(p.accent)
+            .fg(p.panel_bg)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(p.text)
     };
     match row {
         Row::Workspace => Line::from(Span::styled("  workspace", base)),
-        Row::Tab(ti) => Line::from(vec![
-            Span::styled(format!(" ▸ {}", ws.tabs[*ti].label), base),
-        ]),
+        Row::Tab(ti) => Line::from(Span::styled(format!(" ▸ {}", ws.tabs[*ti].label), base)),
         Row::Pane(ti, pi) => {
             let pane = &ws.tabs[*ti].panes[*pi];
-            let dim = st.filter.map_or(false, |f| f != pane.status);
+            let dimmed = st.filter.map_or(false, |f| f != pane.status);
             let glyph_style = if selected {
                 base
             } else {
@@ -269,7 +173,7 @@ fn render_row(ws: &Workspace, row: &Row, selected: bool, st: &NavState, p: &Pale
             };
             let label_style = if selected {
                 base
-            } else if dim {
+            } else if dimmed {
                 Style::default().fg(p.overlay0)
             } else {
                 Style::default().fg(p.subtext0)
@@ -354,9 +258,12 @@ mod tests {
     }
 
     #[test]
-    fn shows_position_counter() {
+    fn switcher_shows_all_workspaces() {
         let s = buffer_string(1, 80, 20);
-        assert!(s.contains("2 of 3"), "position counter:\n{s}");
+        // the top switcher lists every workspace, not just the active one
+        assert!(s.contains("api"), "switcher should list api:\n{s}");
+        assert!(s.contains("web"), "switcher should list web:\n{s}");
+        assert!(s.contains("infra"), "switcher should list infra:\n{s}");
     }
 
     #[test]

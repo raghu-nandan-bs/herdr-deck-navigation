@@ -1,6 +1,8 @@
 #!/bin/sh
-# Opens the deck navigator as a zoomed overlay over the active pane.
-# herdr 0.7.x has no "popup" placement; "overlay" is the modal-style option —
-# a temporary full-screen pane that restores your previous view when it closes.
-# Uses HERDR_BIN_PATH (injected by herdr) so it stays portable across sockets/pipes.
-exec "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin deck --entrypoint picker --placement overlay
+# Opens the navigator in its own throwaway tab. IMPORTANT: use "tab" placement,
+# NOT "overlay" — overlay injects a pane into your *active* tab and zooms it, and
+# its teardown can leave your tab zoomed / splits scrambled. "tab" placement calls
+# herdr's create_tab and never touches existing tabs' split layouts; the tab closes
+# when the picker exits. HERDR_BIN_PATH is injected by herdr.
+exec "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin deck --entrypoint picker \
+  --placement tab --focus

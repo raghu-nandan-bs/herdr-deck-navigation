@@ -89,21 +89,21 @@ herdr's defaults already claim `b c e f g h j k l n o p q r s v w x y z ? tab`, 
 ### Try it without a keybinding
 
 ```bash
-herdr plugin pane open --plugin deck --entrypoint picker --placement overlay
+herdr plugin pane open --plugin deck --entrypoint picker --placement tab --focus
 ```
 
 ## How it works
 
-herdr launches the `herdr-deck` binary in an **overlay pane** (a temporary full-screen
-pane that restores your previous view on close). The binary reads `session.snapshot` over
-herdr's socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders with
+herdr launches the `herdr-deck` binary in its **own throwaway tab** (`--placement tab`),
+which closes when you make a choice. The binary reads `session.snapshot` over herdr's
+socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders with
 [ratatui](https://ratatui.rs), and on `Enter` issues `pane.focus` (or `workspace.focus`)
 before exiting. Colors follow **your herdr theme** — it reads `~/.config/herdr/config.toml`
 and matches your active light/dark theme, falling back to Catppuccin.
 
-> Plugin v1 doesn't allow native in-app UI, so Deck is a self-drawn terminal pane rather
-> than part of herdr's own overlay. It renders transparent, so a translucent terminal
-> shows your background through it.
+> It deliberately uses `tab` placement, **not** `overlay`. Overlay injects a pane into
+> your active tab and zooms it, and its teardown can leave your tab zoomed and your splits
+> scrambled. A throwaway tab never touches any existing tab's split layout.
 
 ## Status glyphs
 

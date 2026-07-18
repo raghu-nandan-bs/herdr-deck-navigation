@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 const CARD_W: u16 = 46;
+const MAX_BACK: usize = 3; // how many stacked card-tops peek behind the front
 
 /// Rows a card needs: 2 borders + rollup line + one row per selectable row.
 fn card_height(ws: &Workspace, max: u16) -> u16 {
@@ -26,18 +27,33 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
         return;
     }
 
-    let switcher = Rect::new(area.x, area.y, area.width, 1);
     let footer = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
-    let body = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(3));
+    let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
 
-    render_switcher(frame, switcher, deck, st, p);
-
-    // one card, centered and fixed; navigating just swaps its contents
+    let n = deck.workspaces.len();
     let front = &deck.workspaces[st.active];
     let cw = CARD_W.min(body.width);
     let ch = card_height(front, body.height);
     let cx = body.x + (body.width - cw) / 2;
-    let cy = body.y + (body.height.saturating_sub(ch)) / 2;
+
+    // Leave room above the front card for the stacked tops, but never push the
+    // card off the bottom.
+    let back = MAX_BACK.min(n.saturating_sub(1));
+    let centered = body.y + body.height.saturating_sub(ch) / 2;
+    let max_cy = body.y + body.height.saturating_sub(ch);
+    let cy = centered.max(body.y + back as u16).min(max_cy);
+
+    // The pile: other workspaces peek up as card-tops behind the front card,
+    // nearest just above it. Same fixed position no matter where you navigate.
+    for d in (1..=back).rev() {
+        let ws = &deck.workspaces[(st.active + d) % n];
+        if let Some(y) = cy.checked_sub(d as u16) {
+            if y >= body.y {
+                render_stack_top(frame, cx, y, cw, ws, p);
+            }
+        }
+    }
+
     render_card(frame, Rect::new(cx, cy, cw, ch), front, st, p);
 
     let hint = Line::from(vec![
@@ -50,30 +66,28 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
     frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), footer);
 }
 
-/// A herdr-tab-strip-style switcher: every workspace as a status dot + name,
-/// the active one highlighted. Gives at-a-glance health across all workspaces.
-fn render_switcher(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Palette) {
-    let mut spans = Vec::new();
-    for (i, ws) in deck.workspaces.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled("   ", Style::default().fg(p.overlay0)));
-        }
-        spans.push(Span::styled(
+/// One row: the rounded top edge of a card behind the front one, with a status
+/// dot + workspace name — so the pile reads as real stacked cards.
+fn render_stack_top(frame: &mut Frame, x: u16, y: u16, w: u16, ws: &Workspace, p: &Palette) {
+    if w < 6 {
+        return;
+    }
+    let name = truncate(&ws.label, (w as usize).saturating_sub(8));
+    let used = 2 + 2 + name.chars().count() + 1; // "╭ " + "● " + name + " "
+    let fill = (w as usize).saturating_sub(used + 1); // + "╮"
+    let line = Line::from(vec![
+        Span::styled("╭ ", Style::default().fg(p.overlay0)),
+        Span::styled(
             format!("{} ", ws.worst.glyph()),
             Style::default().fg(ws.worst.color(p)),
-        ));
-        let name = truncate(&ws.label, 18);
-        let style = if i == st.active {
-            Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(p.overlay0)
-        };
-        spans.push(Span::styled(name, style));
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
-        area,
-    );
+        ),
+        Span::styled(name, Style::default().fg(p.subtext0)),
+        Span::styled(
+            format!(" {}╮", "─".repeat(fill)),
+            Style::default().fg(p.overlay0),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(line), Rect::new(x, y, w, 1));
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -258,12 +272,12 @@ mod tests {
     }
 
     #[test]
-    fn switcher_shows_all_workspaces() {
+    fn stack_tops_show_other_workspaces() {
         let s = buffer_string(1, 80, 20);
-        // the top switcher lists every workspace, not just the active one
-        assert!(s.contains("api"), "switcher should list api:\n{s}");
-        assert!(s.contains("web"), "switcher should list web:\n{s}");
-        assert!(s.contains("infra"), "switcher should list infra:\n{s}");
+        // front card is the active workspace; the pile behind shows the others
+        assert!(s.contains("web"), "front card is web:\n{s}");
+        assert!(s.contains("infra"), "stack top should show infra:\n{s}");
+        assert!(s.contains("api"), "stack top should show api:\n{s}");
     }
 
     #[test]

@@ -636,23 +636,38 @@ impl Palette {
 /// Pick between `dark_name` and `light_name` based on macOS appearance.
 /// Only called when both are known to be present.
 fn resolve_auto_switch_name(theme: &ThemeSection) -> Option<String> {
-    if cfg!(target_os = "macos") {
-        match std::process::Command::new("defaults")
-            .args(["read", "-g", "AppleInterfaceStyle"])
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                if stdout.contains("Dark") {
-                    theme.dark_name.clone()
-                } else {
-                    theme.light_name.clone()
-                }
-            }
-            _ => theme.dark_name.clone().or_else(|| theme.name.clone()),
-        }
+    match detect_dark() {
+        Some(is_dark) => name_for_appearance(theme, is_dark),
+        // Couldn't determine appearance (non-macOS, or `defaults` unavailable).
+        None => theme.dark_name.clone().or_else(|| theme.name.clone()),
+    }
+}
+
+fn name_for_appearance(theme: &ThemeSection, is_dark: bool) -> Option<String> {
+    if is_dark {
+        theme.dark_name.clone()
     } else {
-        theme.dark_name.clone().or_else(|| theme.name.clone())
+        theme.light_name.clone()
+    }
+}
+
+/// `Some(true)` = dark mode, `Some(false)` = light mode, `None` = undetermined.
+/// `defaults read -g AppleInterfaceStyle` prints "Dark" only in dark mode; in
+/// light mode the key is absent so `defaults` exits non-zero — that non-success
+/// exit is the light-mode signal, NOT an error to fall back on.
+fn detect_dark() -> Option<bool> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    match std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+    {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Some(out.status.success() && stdout.contains("Dark"))
+        }
+        Err(_) => None,
     }
 }
 
@@ -780,5 +795,23 @@ mod tests {
         assert_eq!(parse_hex("ff0080"), None); // missing '#'
         assert_eq!(parse_hex("#ff00"), None); // wrong length
         assert_eq!(parse_hex("#gggggg"), None); // non-hex digits
+    }
+
+    #[test]
+    fn light_mode_picks_light_name() {
+        let theme = ThemeSection {
+            name: None,
+            dark_name: Some("vesper".into()),
+            light_name: Some("rose-pine-dawn".into()),
+            auto_switch: true,
+            colors: None,
+            custom: None,
+        };
+        // dark mode -> dark theme, light mode -> light theme (the bug was light -> dark)
+        assert_eq!(name_for_appearance(&theme, true).as_deref(), Some("vesper"));
+        assert_eq!(
+            name_for_appearance(&theme, false).as_deref(),
+            Some("rose-pine-dawn")
+        );
     }
 }

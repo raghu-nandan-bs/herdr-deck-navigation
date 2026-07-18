@@ -11,6 +11,7 @@ use ratatui::{
 
 const CARD_W: u16 = 46;
 const MAX_BACK: usize = 3; // how many stacked card-tops peek behind the front
+const BACK_DX: u16 = 4; // horizontal offset per stacked card (fans the pile)
 
 /// Rows a card needs: 2 borders + rollup line + one row per selectable row.
 fn card_height(ws: &Workspace, max: u16) -> u16 {
@@ -43,13 +44,15 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
     let max_cy = body.y + body.height.saturating_sub(ch);
     let cy = centered.max(body.y + back as u16).min(max_cy);
 
-    // The pile: other workspaces peek up as card-tops behind the front card,
-    // nearest just above it. Same fixed position no matter where you navigate.
+    // The pile: other workspaces fan up-and-left behind the front card as
+    // rounded card-tops, nearest just above it. Fixed position and direction
+    // no matter where you navigate — the fan rotates, nothing flips sides.
     for d in (1..=back).rev() {
         let ws = &deck.workspaces[(st.active + d) % n];
+        let x = cx.saturating_sub(d as u16 * BACK_DX);
         if let Some(y) = cy.checked_sub(d as u16) {
-            if y >= body.y {
-                render_stack_top(frame, cx, y, cw, ws, p);
+            if y >= body.y && x >= body.x {
+                render_stack_top(frame, x, y, cw, ws, p);
             }
         }
     }

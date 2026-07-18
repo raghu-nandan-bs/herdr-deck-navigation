@@ -127,7 +127,7 @@ impl NavState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::build_deck;
+    use crate::model::{build_deck, Context};
     use crossterm::event::KeyCode;
 
     const MINI: &str = r#"
@@ -149,14 +149,14 @@ mod tests {
 
     #[test]
     fn starts_on_current_workspace() {
-        let deck = build_deck(MINI).unwrap();
+        let deck = build_deck(MINI, &Context::default()).unwrap();
         let st = NavState::new(&deck);
         assert_eq!(st.active, 1); // w2 is focused
     }
 
     #[test]
     fn rows_start_with_workspace_then_tabs_and_panes() {
-        let deck = build_deck(MINI).unwrap();
+        let deck = build_deck(MINI, &Context::default()).unwrap();
         let rows = workspace_rows(&deck.workspaces[0]);
         assert_eq!(rows[0], Row::Workspace);
         assert_eq!(rows[1], Row::Tab(0));
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn left_right_move_between_cards_clamped() {
-        let deck = build_deck(MINI).unwrap();
+        let deck = build_deck(MINI, &Context::default()).unwrap();
         let mut st = NavState::new(&deck);
         st.active = 1;
         assert!(matches!(st.on_key(&deck, KeyCode::Left), Outcome::Redraw));
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn right_past_last_workspace_clamps_active() {
-        let deck = build_deck(MINI).unwrap();
+        let deck = build_deck(MINI, &Context::default()).unwrap();
         let mut st = NavState::new(&deck);
         st.active = 1; // last workspace (w2)
         st.on_key(&deck, KeyCode::Right); // clamp at len-1 == 1
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn up_down_move_within_active_card_clamped() {
-        let deck = build_deck(MINI).unwrap();
+        let deck = build_deck(MINI, &Context::default()).unwrap();
         let mut st = NavState::new(&deck);
         st.active = 0;
         st.sel[0] = 0;
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn enter_on_pane_focuses_that_pane() {
-        let deck = build_deck(MINI).unwrap();
+        let deck = build_deck(MINI, &Context::default()).unwrap();
         let mut st = NavState::new(&deck);
         st.active = 0;
         st.sel[0] = 2; // the pane row
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn enter_on_workspace_row_focuses_workspace() {
-        let deck = build_deck(MINI).unwrap();
+        let deck = build_deck(MINI, &Context::default()).unwrap();
         let mut st = NavState::new(&deck);
         st.active = 0;
         st.sel[0] = 0;
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn esc_quits() {
-        let deck = build_deck(MINI).unwrap();
+        let deck = build_deck(MINI, &Context::default()).unwrap();
         let mut st = NavState::new(&deck);
         assert!(matches!(st.on_key(&deck, KeyCode::Esc), Outcome::Quit));
     }

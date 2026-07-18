@@ -16,8 +16,10 @@ use std::io::stdout;
 
 fn main() -> Result<()> {
     let path = client::socket_path()?;
+    let ctx = model::Context::from_env();
+    let palette = theme::Palette::resolve();
     let snapshot = client::snapshot(&path)?;
-    let deck = model::build_deck(&snapshot)?;
+    let deck = model::build_deck(&snapshot, &ctx)?;
     if deck.workspaces.is_empty() {
         eprintln!("herdr-deck: no workspaces");
         return Ok(());
@@ -28,7 +30,7 @@ fn main() -> Result<()> {
     execute!(stdout(), EnterAlternateScreen)?;
     let mut term = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    let result = run(&mut term, &deck, &mut st);
+    let result = run(&mut term, &deck, &mut st, &palette);
 
     disable_raw_mode()?;
     execute!(term.backend_mut(), LeaveAlternateScreen)?;
@@ -47,9 +49,10 @@ fn run(
     term: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     deck: &model::Deck,
     st: &mut NavState,
+    palette: &theme::Palette,
 ) -> Result<Option<state::FocusTarget>> {
     loop {
-        term.draw(|f| ui::render(f, deck, st))?;
+        term.draw(|f| ui::render(f, deck, st, palette))?;
         if let Event::Key(k) = event::read()? {
             if k.kind != KeyEventKind::Press {
                 continue;

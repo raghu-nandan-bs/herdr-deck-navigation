@@ -9,9 +9,11 @@ use ratatui::{
     Frame,
 };
 
-const CARD_W: u16 = 46;
-const PEEK: u16 = 2; // horizontal step between stacked side-card spines
-const MAX_SIDE: usize = 3; // how many stacked neighbours to hint per side
+const CARD_W: u16 = 44;
+const NB_GAP: u16 = 2; // gap between fanned neighbour cards
+const NB_SHRINK: u16 = 7; // each neighbour is this much narrower than the last
+const NB_MIN: u16 = 16; // smallest neighbour width worth drawing
+const MAX_SIDE: usize = 3; // how many neighbours to fan per side
 
 /// Rows a card needs: 2 borders + rollup line + one row per selectable row.
 fn card_height(ws: &Workspace, max: u16) -> u16 {
@@ -38,28 +40,43 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
     let cx = body.x + (body.width - cw) / 2;
     let cy = body.y + (body.height - ch) / 2;
 
-    // Peeking neighbours: upcoming fan left, already-seen fan right.
-    // Farthest first so nearer cards overlap them; the front card is drawn last.
-    for d in (1..=MAX_SIDE).rev() {
-        let dd = d as u16;
-        let sideh = ch.saturating_sub(dd * 2).max(3);
-        let sy = body.y + (body.height - sideh) / 2;
-        // upcoming (left of the front card)
-        if let Some(ws) = deck.workspaces.get(st.active + d) {
-            let x = cx.saturating_sub(dd * PEEK);
-            if x < cx {
-                render_spine(frame, x, sy, sideh, "╮", "╯", ws, p);
-            }
+    // Upcoming workspaces fan out to the LEFT (dimmer + smaller), already-seen
+    // ones to the RIGHT. They sit beside the front card (no overlap), so the
+    // glass/transparent fill stays clean.
+    let mut left_edge = cx;
+    for d in 1..=MAX_SIDE {
+        let Some(ws) = deck.workspaces.get(st.active + d) else {
+            break;
+        };
+        let w = cw.saturating_sub(d as u16 * NB_SHRINK).max(NB_MIN);
+        let h = ch.saturating_sub(d as u16 * 2).max(5);
+        let Some(x) = left_edge.checked_sub(NB_GAP + w) else {
+            break;
+        };
+        if x < body.x {
+            break;
         }
-        // seen (right of the front card)
-        if st.active >= d {
-            if let Some(ws) = deck.workspaces.get(st.active - d) {
-                let x = cx + cw + dd * PEEK - 1;
-                if x < body.x + body.width {
-                    render_spine(frame, x, sy, sideh, "╭", "╰", ws, p);
-                }
-            }
+        let y = body.y + (body.height - h) / 2;
+        render_neighbor(frame, Rect::new(x, y, w, h), ws, p);
+        left_edge = x;
+    }
+    let mut right_edge = cx + cw;
+    for d in 1..=MAX_SIDE {
+        if st.active < d {
+            break;
         }
+        let Some(ws) = deck.workspaces.get(st.active - d) else {
+            break;
+        };
+        let w = cw.saturating_sub(d as u16 * NB_SHRINK).max(NB_MIN);
+        let h = ch.saturating_sub(d as u16 * 2).max(5);
+        let x = right_edge + NB_GAP;
+        if x + w > body.x + body.width {
+            break;
+        }
+        let y = body.y + (body.height - h) / 2;
+        render_neighbor(frame, Rect::new(x, y, w, h), ws, p);
+        right_edge = x + w;
     }
 
     render_card(frame, Rect::new(cx, cy, cw, ch), front, st, p);
@@ -98,30 +115,69 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
     );
 }
 
-/// A thin vertical "card edge" hinting a stacked neighbour, tinted by its worst status.
-fn render_spine(
-    frame: &mut Frame,
-    x: u16,
-    y: u16,
-    h: u16,
-    cap_top: &str,
-    cap_bottom: &str,
-    ws: &Workspace,
-    _p: &Palette,
-) {
-    if h < 2 {
+/// A dimmed, compact neighbour card in the fan: rounded border, name, worst-status
+/// stripe, rollup, and its tab list — enough to read as another workspace card.
+fn render_neighbor(frame: &mut Frame, rect: Rect, ws: &Workspace, p: &Palette) {
+    let title = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            ws.label.clone(),
+            Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(p.overlay0))
+        .title(title);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    if inner.height == 0 || inner.width < 2 {
         return;
     }
-    let color = ws.worst.color(_p);
-    let mut lines = vec![Line::from(Span::styled(cap_top.to_string(), Style::default().fg(color)))];
-    for _ in 1..h - 1 {
-        lines.push(Line::from(Span::styled("│", Style::default().fg(color))));
-    }
-    lines.push(Line::from(Span::styled(
-        cap_bottom.to_string(),
-        Style::default().fg(color),
-    )));
-    frame.render_widget(Paragraph::new(lines), Rect::new(x, y, 1, h));
+
+    // worst-status stripe
+    let bar: Vec<Line> = (0..inner.height)
+        .map(|_| Line::from(Span::styled("▌", Style::default().fg(ws.worst.color(p)))))
+        .collect();
+    frame.render_widget(Paragraph::new(bar), Rect::new(inner.x, inner.y, 1, inner.height));
+    let content = Rect::new(inner.x + 1, inner.y, inner.width - 1, inner.height);
+
+    let rollup = Line::from(vec![
+        rollup_span(p.red, "◉", ws.counts.blocked, p),
+        Span::raw(" "),
+        rollup_span(p.yellow, "◍", ws.counts.working, p),
+        Span::raw(" "),
+        rollup_span(p.teal, "●", ws.counts.done, p),
+        Span::raw(" "),
+        rollup_span(p.green, "✓", ws.counts.idle, p),
+    ]);
+    frame.render_widget(
+        Paragraph::new(rollup),
+        Rect::new(content.x, content.y, content.width, 1),
+    );
+
+    // dim tab list to give the card substance
+    let tabs: Vec<Line> = ws
+        .tabs
+        .iter()
+        .map(|t| {
+            Line::from(Span::styled(
+                format!(" ▸ {}", t.label),
+                Style::default().fg(p.overlay0),
+            ))
+        })
+        .collect();
+    frame.render_widget(
+        Paragraph::new(tabs),
+        Rect::new(
+            content.x,
+            content.y + 1,
+            content.width,
+            content.height.saturating_sub(1),
+        ),
+    );
 }
 
 fn render_card(frame: &mut Frame, rect: Rect, ws: &Workspace, st: &NavState, p: &Palette) {
@@ -138,12 +194,14 @@ fn render_card(frame: &mut Frame, rect: Rect, ws: &Workspace, st: &NavState, p: 
         ),
         Span::raw(" "),
     ]);
+    // No background fill: the card is transparent so the terminal's (blurred)
+    // wallpaper shows through it — real frosted glass. Only the border, text,
+    // stripe, and the selected-row highlight paint pixels.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(p.accent))
-        .title(title)
-        .style(Style::default().bg(p.panel_bg));
+        .title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     if inner.height == 0 || inner.width < 2 {

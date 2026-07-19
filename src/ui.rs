@@ -1,5 +1,5 @@
 use crate::model::Deck;
-use crate::state::{search_results, workspace_panes, Mode, NavState};
+use crate::state::{search_results, workspace_panes, Column, Mode, NavState};
 use crate::theme::Palette;
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -9,7 +9,18 @@ use ratatui::{
     Frame,
 };
 
-const RAIL_W: u16 = 28;
+/// Rail width: wide enough for the longest workspace name (plus number, dot, and
+/// pane count), capped so the focus pane keeps room.
+fn rail_width(deck: &Deck, area_w: u16) -> u16 {
+    let name_w = deck
+        .workspaces
+        .iter()
+        .map(|w| w.label.chars().count())
+        .max()
+        .unwrap_or(8) as u16;
+    // chrome = " N ● " (5) + name + "  NN" (up to 4) ≈ name + 10
+    (name_w + 10).clamp(20, (area_w * 2 / 5).max(20).min(52))
+}
 
 pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
     let area = frame.area();
@@ -37,7 +48,8 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
 
     match st.mode {
         Mode::Browse => {
-            let h = Layout::horizontal([Constraint::Length(RAIL_W), Constraint::Min(0)]).split(v[2]);
+            let rw = rail_width(deck, area.width);
+            let h = Layout::horizontal([Constraint::Length(rw), Constraint::Min(0)]).split(v[2]);
             render_rail(frame, h[0], deck, st, p);
             render_focus(frame, h[1], deck, st, p);
         }
@@ -97,16 +109,24 @@ fn render_rail(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Pa
         " WORKSPACES",
         Style::default().fg(p.overlay0),
     ))];
+    let col_focused = st.focus == Column::Rail;
     for (i, w) in deck.workspaces.iter().enumerate() {
         let active = i == st.active;
-        let marker = if active { "▎" } else { " " };
+        // bright cursor when this column has focus, faint when it doesn't
+        let (marker, marker_style) = match (active, col_focused) {
+            (true, true) => ("▎", Style::default().fg(p.accent)),
+            (true, false) => ("▏", Style::default().fg(p.overlay0)),
+            (false, _) => (" ", Style::default().fg(p.overlay0)),
+        };
         let num_style = if active {
             Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.overlay0)
         };
-        let name_style = if active {
+        let name_style = if active && col_focused {
             Style::default().fg(p.text).add_modifier(Modifier::BOLD)
+        } else if active {
+            Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.subtext0)
         };
@@ -117,7 +137,7 @@ fn render_rail(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Pa
         };
         let pc = workspace_panes(w).len();
         lines.push(Line::from(vec![
-            Span::styled(marker, Style::default().fg(p.accent)),
+            Span::styled(marker, marker_style),
             Span::styled(num, num_style),
             Span::styled("● ", Style::default().fg(w.worst.color(p))),
             Span::styled(truncate(&w.label, inner.width.saturating_sub(9) as usize), name_style),
@@ -157,7 +177,8 @@ fn render_focus(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &P
         head[1],
     );
 
-    // body: tabs + panes, selected pane highlighted
+    // body: tabs + panes, selected pane highlighted (bright when this column has focus)
+    let col_focused = st.focus == Column::Panes;
     let sel = st.sel.get(st.active).copied().unwrap_or(0);
     let mut lines: Vec<Line> = Vec::new();
     let mut sel_line = 0usize;
@@ -175,18 +196,22 @@ fn render_focus(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &P
             if selected {
                 sel_line = lines.len();
             }
-            let (marker, gstyle, lstyle) = if selected {
-                (
+            let (marker, gstyle, lstyle) = match (selected, col_focused) {
+                (true, true) => (
                     Span::styled("▎", Style::default().fg(p.accent)),
                     Style::default().fg(pane.status.color(p)),
                     Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-                )
-            } else {
-                (
+                ),
+                (true, false) => (
+                    Span::styled("▏", Style::default().fg(p.overlay0)),
+                    Style::default().fg(pane.status.color(p)),
+                    Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD),
+                ),
+                (false, _) => (
                     Span::raw(" "),
                     Style::default().fg(pane.status.color(p)),
                     Style::default().fg(p.subtext0),
-                )
+                ),
             };
             lines.push(Line::from(vec![
                 marker,
@@ -249,8 +274,9 @@ fn render_results(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: 
 fn render_footer(frame: &mut Frame, area: Rect, st: &NavState, p: &Palette) {
     let line = match st.mode {
         Mode::Browse => Line::from(vec![
+            key("← →", p), dim(" column   ", p),
+            key("↑ ↓", p), dim(" move   ", p),
             key("1–9", p), dim(" workspace   ", p),
-            key("↑ ↓", p), dim(" pane   ", p),
             key("/", p), dim(" search   ", p),
             key("↵", p), dim(" switch   ", p),
             key("esc", p), dim(" close", p),

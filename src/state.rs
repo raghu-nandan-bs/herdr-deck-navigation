@@ -7,6 +7,13 @@ pub enum Mode {
     Search,
 }
 
+/// Which column has the keyboard cursor in Browse mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Column {
+    Rail,  // the workspace list
+    Panes, // the focused workspace's tabs/panes
+}
+
 #[derive(Debug)]
 pub enum FocusTarget {
     Workspace(String),
@@ -60,6 +67,7 @@ pub fn search_results(deck: &Deck, query: &str) -> Vec<Loc> {
 pub struct NavState {
     pub active: usize,     // selected workspace (the rail)
     pub sel: Vec<usize>,   // selected pane index (into workspace_panes) per workspace
+    pub focus: Column,     // which column ↑/↓ moves within
     pub mode: Mode,
     pub query: String,
     pub result_sel: usize, // selected row in the search results
@@ -85,10 +93,17 @@ impl NavState {
         NavState {
             active,
             sel,
+            focus: Column::Rail,
             mode: Mode::Browse,
             query: String::new(),
             result_sel: 0,
         }
+    }
+
+    fn clamp_sel(&mut self, deck: &Deck) {
+        let n = workspace_panes(&deck.workspaces[self.active]).len();
+        let s = self.sel[self.active];
+        self.sel[self.active] = if n == 0 { 0 } else { s.min(n - 1) };
     }
 
     pub fn on_key(&mut self, deck: &Deck, code: KeyCode) -> Outcome {
@@ -106,30 +121,51 @@ impl NavState {
                 self.result_sel = 0;
                 Outcome::Redraw
             }
+            // number keys are a shortcut straight to a workspace
             KeyCode::Char(c @ '1'..='9') => {
                 let i = c as usize - '1' as usize;
                 if i < deck.workspaces.len() {
                     self.active = i;
+                    self.clamp_sel(deck);
                 }
                 Outcome::Redraw
             }
+            // ← / → switch which column the cursor is in
             KeyCode::Left | KeyCode::Char('h') => {
-                self.active = self.active.saturating_sub(1);
+                self.focus = Column::Rail;
                 Outcome::Redraw
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                self.active = (self.active + 1).min(deck.workspaces.len().saturating_sub(1));
+                self.focus = Column::Panes;
                 Outcome::Redraw
             }
+            // ↑ / ↓ move within the focused column
             KeyCode::Down | KeyCode::Char('j') => {
-                let n = workspace_panes(&deck.workspaces[self.active]).len();
-                if n > 0 {
-                    self.sel[self.active] = (self.sel[self.active] + 1).min(n - 1);
+                match self.focus {
+                    Column::Rail => {
+                        self.active =
+                            (self.active + 1).min(deck.workspaces.len().saturating_sub(1));
+                        self.clamp_sel(deck);
+                    }
+                    Column::Panes => {
+                        let n = workspace_panes(&deck.workspaces[self.active]).len();
+                        if n > 0 {
+                            self.sel[self.active] = (self.sel[self.active] + 1).min(n - 1);
+                        }
+                    }
                 }
                 Outcome::Redraw
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.sel[self.active] = self.sel[self.active].saturating_sub(1);
+                match self.focus {
+                    Column::Rail => {
+                        self.active = self.active.saturating_sub(1);
+                        self.clamp_sel(deck);
+                    }
+                    Column::Panes => {
+                        self.sel[self.active] = self.sel[self.active].saturating_sub(1);
+                    }
+                }
                 Outcome::Redraw
             }
             KeyCode::Enter => match self.browse_target(deck) {
@@ -143,10 +179,15 @@ impl NavState {
 
     fn browse_target(&self, deck: &Deck) -> Option<FocusTarget> {
         let w = deck.workspaces.get(self.active)?;
+        // On the rail, Enter switches to the whole workspace; in the pane column,
+        // Enter switches to the selected pane.
+        if self.focus == Column::Rail {
+            return Some(FocusTarget::Workspace(w.id.clone()));
+        }
         let panes = workspace_panes(w);
         match panes.get(self.sel.get(self.active).copied().unwrap_or(0)) {
             Some(&(ti, pi)) => Some(FocusTarget::Pane(w.tabs[ti].panes[pi].id.clone())),
-            None => Some(FocusTarget::Workspace(w.id.clone())), // empty workspace
+            None => Some(FocusTarget::Workspace(w.id.clone())),
         }
     }
 
@@ -243,24 +284,41 @@ mod tests {
     }
 
     #[test]
-    fn down_moves_through_panes_clamped() {
+    fn left_right_switch_column_vertical_moves_within() {
         let d = deck();
         let mut st = NavState::new(&d);
+        st.active = 0;
+        st.sel[0] = 0;
+        // default column is the rail: ↓ moves workspace
+        assert_eq!(st.focus, Column::Rail);
+        st.on_key(&d, KeyCode::Down);
+        assert_eq!(st.active, 1);
+        // → switches to the pane column: ↓ now moves panes
+        st.on_key(&d, KeyCode::Right);
+        assert_eq!(st.focus, Column::Panes);
         st.active = 0; // api has 2 panes
         st.sel[0] = 0;
         st.on_key(&d, KeyCode::Down);
         assert_eq!(st.sel[0], 1);
         st.on_key(&d, KeyCode::Down); // clamp
         assert_eq!(st.sel[0], 1);
-        st.on_key(&d, KeyCode::Up);
-        assert_eq!(st.sel[0], 0);
+        // ← back to the rail
+        st.on_key(&d, KeyCode::Left);
+        assert_eq!(st.focus, Column::Rail);
     }
 
     #[test]
-    fn enter_focuses_selected_pane() {
+    fn enter_on_pane_column_focuses_pane_on_rail_focuses_workspace() {
         let d = deck();
         let mut st = NavState::new(&d);
         st.active = 0;
+        // rail focus → workspace target
+        match st.on_key(&d, KeyCode::Enter) {
+            Outcome::Focus(FocusTarget::Workspace(id)) => assert_eq!(id, "w1"),
+            other => panic!("expected workspace focus, got {other:?}"),
+        }
+        // pane column → pane target
+        st.focus = Column::Panes;
         st.sel[0] = 1; // w1:p2
         match st.on_key(&d, KeyCode::Enter) {
             Outcome::Focus(FocusTarget::Pane(id)) => assert_eq!(id, "w1:p2"),

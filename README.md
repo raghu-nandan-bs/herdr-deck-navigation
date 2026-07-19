@@ -35,13 +35,17 @@ Press `/` and type to jump straight to a pane anywhere:
 ## Keys
 
 ```
+ ← / →  switch column: workspace rail ↔ pane list      (also h / l)
+ ↑ / ↓  move within the focused column                 (also j / k)
  1–9    jump straight to a workspace
- ↑ / ↓  move through the focused workspace's panes   (also j / k)
- ← / →  step to the previous / next workspace         (also h / l)
  /      search every pane across all workspaces; then type · ↑/↓ · Enter
- Enter  switch to the selected pane
+ Enter  switch to the selected workspace (rail) or pane (list)
  Esc    close   (in search mode: back to browsing)
 ```
+
+Navigation is Miller-columns style: `←/→` moves the cursor between the two columns, and
+`↑/↓` always moves within whichever column has it. The focused column shows a bright
+cursor; the other a faint one.
 
 The rail shows every workspace with a status dot colored by its **worst** agent state, so
 a workspace with a blocked agent (`●` red) stands out at a glance.

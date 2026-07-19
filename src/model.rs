@@ -171,6 +171,11 @@ pub fn build_deck(json: &str, ctx: &Context) -> Result<Deck> {
                     status,
                 });
             }
+            // Drop tabs left empty after excluding our own pane — herdr tabs always
+            // have ≥1 pane, so an empty one is the plugin's own throwaway tab.
+            if panes.is_empty() {
+                continue;
+            }
             tabs.push(Tab {
                 label: t.label.clone(),
                 panes,
@@ -266,6 +271,31 @@ mod tests {
         assert_eq!(d.workspaces[0].tabs[0].panes.len(), 1);
         assert_eq!(d.workspaces[0].tabs[0].panes[0].label, "loadtest agent");
         assert_eq!(d.workspaces[0].counts.blocked, 0);
+    }
+
+    #[test]
+    fn drops_tab_left_empty_by_self_exclusion() {
+        // w1 gains a second tab that holds ONLY the plugin's own pane; after
+        // excluding it, that tab is empty and must not appear (no ghost tab).
+        let json = r#"
+        {"result":{"snapshot":{
+          "workspaces":[{"workspace_id":"w1","label":"api","number":1}],
+          "tabs":[
+            {"tab_id":"w1:t1","workspace_id":"w1","label":"server","number":1},
+            {"tab_id":"w1:t9","workspace_id":"w1","label":"9","number":9}
+          ],
+          "panes":[
+            {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle","label":"real"},
+            {"pane_id":"w1:p9","tab_id":"w1:t9","workspace_id":"w1","agent_status":"unknown","label":"picker"}
+          ]
+        }}}"#;
+        let ctx = Context {
+            self_pane_id: Some("w1:p9".into()),
+            ..Default::default()
+        };
+        let d = build_deck(json, &ctx).unwrap();
+        assert_eq!(d.workspaces[0].tabs.len(), 1); // the empty "9" tab is dropped
+        assert_eq!(d.workspaces[0].tabs[0].label, "server");
     }
 
     #[test]

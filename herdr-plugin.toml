@@ -1,8 +1,8 @@
 id = "deck"
 name = "Deck"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.7.0"
-description = "Card-style workspace navigator"
+description = "Fast workspace & pane navigator"
 platforms = ["linux", "macos"]
 
 [[build]]

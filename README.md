@@ -9,27 +9,32 @@ navigator built to reach any pane fast **without scrolling**:
 - **`/` search** across every pane in every workspace, with live results.
 
 ```
- / press / to search · 1–9 to jump                        22 panes
- ─────────────────────────────────────────────────────────────────
- WORKSPACES               │ load-generator          ◉0 ◍1 ●0 ✓1
- 1 ● esd            5     │ ▸ lg-runner
-▎2 ● load-generator 2    │   ▎✓ loadtest agent
- 3 ● noc            2     │ ▸ deploy
- 4 ● infra          3     │    ◍ terraform
- 5 ● web            4     │
- ─────────────────────────────────────────────────────────────────
- 1–9 workspace   ↑ ↓ pane   / search   ↵ switch   esc close
+  / press / to search · 1–9 to jump                          22 panes
+ ─────────────────────────────────────────────────────────────────────
+  WORKSPACES              │  LOAD-GENERATOR              ◉0 ◍1 ●0 ✓1
+                          │
+ ▌1 ● esd             5   │    ▸ lg-runner
+  2 ● load-generator  2   │  ▌ ✓ loadtest agent
+  3 ● noc             2   │    ▸ deploy
+  4 ● infra           3   │      ◍ terraform
+ ─────────────────────────────────────────────────────────────────────
+  ~/code/load-generator · loadtest agent · claude · idle
+  ← → column   ↑ ↓ move   1–9 jump   / search   ↵ switch   esc close
 ```
 
-Press `/` and type to jump straight to a pane anywhere:
+The active row gets a soft full-width highlight; counts align into a column; the
+focused workspace's `◉ ◍ ● ✓` rollup sits in its header; and a detail strip at the
+bottom shows the selected pane's path, agent, and status. Press `/` to search across
+every pane:
 
 ```
- / tf                                                      22 panes
- ─────────────────────────────────────────────────────────────────
- ▎◍ terraform             infra ▸ deploy
-  ◉ tf-plan               infra ▸ tf-plan
- ─────────────────────────────────────────────────────────────────
- type to filter   ↑ ↓ select   ↵ switch   esc back
+  / tf                                                        22 panes
+ ─────────────────────────────────────────────────────────────────────
+ ▌◍ terraform              infra ▸ deploy
+  ◉ tf-plan                infra ▸ tf-plan
+ ─────────────────────────────────────────────────────────────────────
+  ~/infra · terraform · idle
+  type to filter   ↑ ↓ select   ↵ switch   esc back
 ```
 
 ## Keys

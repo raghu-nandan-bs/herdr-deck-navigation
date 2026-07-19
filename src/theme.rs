@@ -40,6 +40,16 @@ impl Status {
         }
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            Status::Blocked => "blocked",
+            Status::Working => "working",
+            Status::Done => "done",
+            Status::Idle => "idle",
+            Status::Unknown => "shell",
+        }
+    }
+
     pub fn color(self, p: &Palette) -> Color {
         match self {
             Status::Blocked => p.red,

@@ -49,6 +49,10 @@ struct RawPane {
     /// Human label herdr assigns (agent name, terminal title, …). Absent for plain shells.
     #[serde(default)]
     label: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
 }
 
 /// Invocation context from herdr's env, used to (a) drop Deck's own overlay pane
@@ -106,6 +110,8 @@ pub struct Pane {
     pub label: String,
     pub status: Status,
     pub is_current: bool,
+    pub cwd: Option<String>,
+    pub agent: Option<String>,
 }
 pub struct Tab {
     pub label: String,
@@ -169,6 +175,8 @@ pub fn build_deck(json: &str, ctx: &Context) -> Result<Deck> {
                     is_current: cur_pane.as_deref() == Some(p.pane_id.as_str()),
                     id: p.pane_id.clone(),
                     status,
+                    cwd: p.cwd.clone().filter(|s| !s.is_empty()),
+                    agent: p.agent.clone().filter(|s| !s.is_empty()),
                 });
             }
             // Drop tabs left empty after excluding our own pane — herdr tabs always

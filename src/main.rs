@@ -19,7 +19,7 @@ fn main() -> Result<()> {
     let ctx = model::Context::from_env();
     let palette = theme::Palette::resolve();
     let snapshot = client::snapshot(&path)?;
-    let deck = model::build_deck(&snapshot, &ctx)?;
+    let mut deck = model::build_deck(&snapshot, &ctx)?;
     if deck.workspaces.is_empty() {
         eprintln!("herdr-deck: no workspaces");
         return Ok(());
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
     execute!(stdout(), EnterAlternateScreen)?;
     let mut term = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    let result = run(&mut term, &deck, &mut st, &palette);
+    let result = run(&mut term, &path, &ctx, &mut deck, &mut st, &palette);
 
     disable_raw_mode()?;
     execute!(term.backend_mut(), LeaveAlternateScreen)?;
@@ -47,26 +47,39 @@ fn main() -> Result<()> {
 
 fn run(
     term: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    deck: &model::Deck,
+    path: &std::path::Path,
+    ctx: &model::Context,
+    deck: &mut model::Deck,
     st: &mut NavState,
     palette: &theme::Palette,
 ) -> Result<Option<state::FocusTarget>> {
+    use std::time::Duration;
     loop {
         term.draw(|f| ui::render(f, deck, st, palette))?;
-        if let Event::Key(k) = event::read()? {
-            if k.kind != KeyEventKind::Press {
-                continue;
+        // Poll so a left-open deck refreshes itself: renames, new panes, and
+        // agent-status changes show up without reopening.
+        if event::poll(Duration::from_millis(1000))? {
+            if let Event::Key(k) = event::read()? {
+                if k.kind != KeyEventKind::Press {
+                    continue;
+                }
+                // Ctrl-C safety exit
+                if k.code == KeyCode::Char('c')
+                    && k.modifiers.contains(event::KeyModifiers::CONTROL)
+                {
+                    return Ok(None);
+                }
+                match st.on_key(deck, k.code) {
+                    Outcome::Quit => return Ok(None),
+                    Outcome::Focus(t) => return Ok(Some(t)),
+                    Outcome::Redraw => {}
+                }
             }
-            // Ctrl-C safety exit
-            if k.code == KeyCode::Char('c')
-                && k.modifiers.contains(event::KeyModifiers::CONTROL)
-            {
-                return Ok(None);
-            }
-            match st.on_key(deck, k.code) {
-                Outcome::Quit => return Ok(None),
-                Outcome::Focus(t) => return Ok(Some(t)),
-                Outcome::Redraw => {}
+        } else if let Ok(snapshot) = client::snapshot(path) {
+            // idle tick: re-fetch and rebuild, keeping the cursor in place
+            if let Ok(fresh) = model::build_deck(&snapshot, ctx) {
+                *deck = fresh;
+                st.reconcile(deck);
             }
         }
     }

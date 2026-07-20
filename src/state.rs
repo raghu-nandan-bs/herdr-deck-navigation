@@ -106,6 +106,23 @@ impl NavState {
         self.sel[self.active] = if n == 0 { 0 } else { s.min(n - 1) };
     }
 
+    /// Keep the cursor valid after a live refresh (workspaces added/removed, panes
+    /// closed). Renames leave ids/order unchanged, so the cursor stays put.
+    pub fn reconcile(&mut self, deck: &Deck) {
+        let n = deck.workspaces.len();
+        if n == 0 {
+            self.active = 0;
+            self.sel.clear();
+            return;
+        }
+        self.active = self.active.min(n - 1);
+        self.sel.resize(n, 0);
+        for (i, ws) in deck.workspaces.iter().enumerate() {
+            let pc = workspace_panes(ws).len();
+            self.sel[i] = if pc == 0 { 0 } else { self.sel[i].min(pc - 1) };
+        }
+    }
+
     pub fn on_key(&mut self, deck: &Deck, code: KeyCode) -> Outcome {
         match self.mode {
             Mode::Browse => self.on_browse_key(deck, code),
@@ -361,6 +378,27 @@ mod tests {
         st.on_key(&d, KeyCode::Char('/'));
         st.on_key(&d, KeyCode::Esc);
         assert_eq!(st.mode, Mode::Browse);
+    }
+
+    #[test]
+    fn reconcile_clamps_cursor_after_workspaces_shrink() {
+        let big = deck(); // 3 workspaces
+        let mut st = NavState::new(&big);
+        st.active = 2;
+        st.sel = vec![9, 9, 9];
+        let small = build_deck(
+            r#"{"result":{"snapshot":{
+              "workspaces":[{"workspace_id":"w1","label":"api","number":1}],
+              "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"t","number":1}],
+              "panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle"}]
+            }}}"#,
+            &Context::default(),
+        )
+        .unwrap();
+        st.reconcile(&small);
+        assert_eq!(st.active, 0);
+        assert_eq!(st.sel.len(), 1);
+        assert_eq!(st.sel[0], 0); // clamped to the single pane
     }
 
     #[test]

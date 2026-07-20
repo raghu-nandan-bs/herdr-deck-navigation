@@ -108,7 +108,9 @@ which closes when you make a choice. The binary reads `session.snapshot` over he
 socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders with
 [ratatui](https://ratatui.rs), and on `Enter` issues `pane.focus` (or `workspace.focus`)
 before exiting. Colors follow **your herdr theme** — it reads `~/.config/herdr/config.toml`
-and matches your active light/dark theme, falling back to Catppuccin.
+and matches your active light/dark theme, falling back to Catppuccin. It re-reads the
+snapshot on a ~1s idle tick, so a left-open navigator keeps up with renames, new panes,
+and agent-status changes without reopening.
 
 > It deliberately uses `tab` placement, **not** `overlay`. Overlay injects a pane into
 > your active tab and zooms it, and its teardown can leave your tab zoomed and your splits
@@ -135,9 +137,8 @@ and matches your active light/dark theme, falling back to Catppuccin.
 
 ## Not yet
 
-Per-pane preview (recent output / cwd / git branch in the focus pane), live event-stream
-refresh (renders a point-in-time snapshot), and a Windows named-pipe transport
-(macOS/Linux only for now).
+Richer preview (recent pane output / git branch — the detail strip already shows cwd,
+agent, and status), and a Windows named-pipe transport (macOS/Linux only for now).
 
 ## License
 

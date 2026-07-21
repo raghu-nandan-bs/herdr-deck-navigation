@@ -1,6 +1,6 @@
 [package]
 name = "herdr-deck"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Card-style workspace navigator plugin for herdr"
 license = "MIT"

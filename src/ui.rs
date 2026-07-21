@@ -24,9 +24,12 @@ fn rail_width(deck: &Deck, area_w: u16) -> u16 {
 
 pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
     let area = frame.area();
+    // Solid theme background — readability first. A transparent panel is unreadable
+    // in a dark theme over a dark wallpaper, so we fill with the theme's panel bg.
+    frame.render_widget(Block::default().style(Style::default().bg(p.panel_bg)), area);
     if deck.workspaces.is_empty() || area.width < 24 || area.height < 8 {
         frame.render_widget(
-            Paragraph::new("no workspaces").style(Style::default().fg(p.overlay0)),
+            Paragraph::new("no workspaces").style(Style::default().fg(p.overlay0).bg(p.panel_bg)),
             area,
         );
         return;
@@ -496,5 +499,18 @@ mod tests {
     fn does_not_panic_on_tiny_terminal() {
         let _ = draw(|_| {}, 24, 8);
         let _ = draw(|st| st.active = 1, 30, 10);
+    }
+
+    #[test]
+    fn fills_opaque_theme_background() {
+        // an empty body cell must carry the theme's panel bg (readability, not
+        // a see-through wallpaper)
+        let deck = build_deck(MINI, &Context::default()).unwrap();
+        let st = NavState::new(&deck);
+        let pal = Palette::catppuccin();
+        let mut term = Terminal::new(TestBackend::new(80, 18)).unwrap();
+        term.draw(|f| render(f, &deck, &st, &pal)).unwrap();
+        let buf = term.backend().buffer();
+        assert_eq!(buf.cell((70, 10)).unwrap().bg, pal.panel_bg);
     }
 }

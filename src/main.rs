@@ -1,4 +1,5 @@
 mod client;
+mod recent;
 mod model;
 mod state;
 mod theme;
@@ -25,6 +26,11 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let mut st = NavState::new(&deck);
+    st.recent = recent::load();
+    // Remember where the user was, so a later `r` can bring them back here.
+    if let Some(id) = ctx.current_pane_id.as_deref() {
+        recent::record(id);
+    }
 
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen)?;
@@ -38,7 +44,12 @@ fn main() -> Result<()> {
 
     // Perform the focus action AFTER restoring the terminal so the popup closes cleanly.
     match result {
-        Ok(Some(target)) => client::focus(&path, &target)?,
+        Ok(Some(target)) => {
+            if let state::FocusTarget::Pane(id) = &target {
+                recent::record(id);
+            }
+            client::focus(&path, &target)?
+        }
         Ok(None) => {}
         Err(e) => return Err(e),
     }

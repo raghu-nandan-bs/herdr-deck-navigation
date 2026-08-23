@@ -1,15 +1,19 @@
 # Deck — fast workspace & pane navigator for [herdr](https://herdr.dev)
 
-herdr's built-in navigator is a single flat list of every workspace → tab → pane. With
-5+ workspaces and lots of panes that means a lot of scrolling. **Deck** replaces it with a
-navigator built to reach any pane fast **without scrolling**:
+You have 22 panes and six agents running. The question is never *"where is pane 14"* — it's
+**"who needs me, and what finished while I was gone?"** herdr's built-in navigator is a flat
+list that has no opinion about that. **Deck** does.
 
-- a **rail** of all your workspaces (never scrolls — jump to any with `1`–`9`),
-- a **focus pane** showing only the selected workspace's tabs & panes (short list),
-- **`/` search** across every pane in every workspace, with live results.
+- **`tab` walks the attention queue** — every blocked agent first, then everything that
+  finished unseen, across all workspaces. Open, `tab`, `tab`, done.
+- **Deck opens on the answer**, not the map: if an agent is waiting on you, the cursor is
+  already there and `↵` goes.
+- **`r` resumes** — alt-tab back to the pane you were in before this one.
+- Browsing is still there when you want it: a **workspace rail**, a **focus pane** of the
+  selected workspace's tabs & panes, and **`/` search** over every pane's name, path, and agent.
 
 ```
-  / press / to search · 1–9 to jump                          22 panes
+  / tab for whoever needs you · / to search          1 blocked · 3 done
  ─────────────────────────────────────────────────────────────────────
   WORKSPACES              │  LOAD-GENERATOR              ◉0 ◍1 ●0 ✓1
                           │
@@ -19,16 +23,18 @@ navigator built to reach any pane fast **without scrolling**:
   4 ● infra           3   │      ◍ terraform
  ─────────────────────────────────────────────────────────────────────
   ~/code/load-generator · loadtest agent · claude · idle
-  ← → column   ↑ ↓ move   1–9 jump   / search   ↵ switch   esc close
+  tab needs you   r resume   ← → column   ↑ ↓ move   / search   ↵ switch
 ```
 
-The active row gets a soft full-width highlight; counts align into a column; the
-focused workspace's `◉ ◍ ● ✓` rollup sits in its header; and a detail strip at the
-bottom shows the selected pane's path, agent, and status. Press `/` to search across
-every pane:
+The top-right corner is the headline: `1 blocked · 3 done` in red when someone's waiting,
+falling back to a plain pane count when nothing needs you. The active row gets a soft
+full-width highlight; counts align into a column; the focused workspace's `◉ ◍ ● ✓`
+rollup sits in its header; and a detail strip at the bottom shows the selected pane's
+path, agent, and status. Press `/` to search across every pane — matching its **name,
+its cwd, and its agent**, so `tf`, `~/infra`, or `claude` all work:
 
 ```
-  / tf                                                        22 panes
+  / tf                                               1 blocked · 3 done
  ─────────────────────────────────────────────────────────────────────
  ▌◍ terraform              infra ▸ deploy
   ◉ tf-plan                infra ▸ tf-plan
@@ -40,13 +46,31 @@ every pane:
 ## Keys
 
 ```
+ Tab    next pane that needs you — blocked first, then done  (Shift-Tab: back)
+ r      resume: jump straight back to your previous pane
  ← / →  switch column: workspace rail ↔ pane list      (also h / l)
  ↑ / ↓  move within the focused column                 (also j / k)
  1–9    jump straight to a workspace
- /      search every pane across all workspaces; then type · ↑/↓ · Enter
+ /      search every pane by name, cwd, or agent; then type · ↑/↓ · Enter
  Enter  switch to the selected workspace (rail) or pane (list)
  Esc    close   (in search mode: back to browsing)
 ```
+
+### The attention queue
+
+`Tab` cycles panes that want you, worst first: everything **blocked** (an agent is waiting
+on your input), then everything **done** (it finished and you haven't seen it). `working`
+and idle panes are deliberately skipped — they don't need you. When Deck opens, the cursor
+starts on the head of that queue, so the common case is `prefix+d`, `↵`.
+
+If nothing is blocked or done, Deck opens where you left off and `Tab` does nothing.
+
+### Resume
+
+Deck records each pane it sends you to in `$XDG_STATE_HOME/herdr-deck/recent.json`
+(default `~/.local/state/herdr-deck/recent.json`). `r` jumps to the most recent one that
+isn't the pane you're currently in — an alt-tab for agents. Nothing else reads the file;
+deleting it just clears the history.
 
 Navigation is Miller-columns style: `←/→` moves the cursor between the two columns, and
 `↑/↓` always moves within whichever column has it. The focused column shows a bright
@@ -110,7 +134,8 @@ socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders with
 before exiting. Colors follow **your herdr theme** — it reads `~/.config/herdr/config.toml`
 and matches your active light/dark theme, falling back to Catppuccin. It re-reads the
 snapshot on a ~1s idle tick, so a left-open navigator keeps up with renames, new panes,
-and agent-status changes without reopening.
+and agent-status changes without reopening — including the attention queue, so a pane that
+becomes blocked while you're looking joins the `tab` cycle.
 
 > It deliberately uses `tab` placement, **not** `overlay`. Overlay injects a pane into
 > your active tab and zooms it, and its teardown can leave your tab zoomed and your splits
@@ -137,8 +162,12 @@ and agent-status changes without reopening.
 
 ## Not yet
 
-Richer preview (recent pane output / git branch — the detail strip already shows cwd,
-agent, and status), and a Windows named-pipe transport (macOS/Linux only for now).
+**Richer preview** (recent pane output / git branch) is deliberately deferred: it turns
+Deck into a dashboard — something you look at — and Deck's whole advantage is being
+something you pass through in under a second. `tab`-to-next-blocked mostly dissolves the
+question it would answer.
+
+Still open: a Windows named-pipe transport (macOS/Linux only for now).
 
 ## License
 

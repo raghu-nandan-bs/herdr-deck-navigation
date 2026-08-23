@@ -1,4 +1,5 @@
 use crate::model::{Deck, Workspace};
+use crate::theme::Status;
 use crossterm::event::KeyCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +55,15 @@ pub fn search_results(deck: &Deck, query: &str) -> Vec<Loc> {
     for (wi, w) in deck.workspaces.iter().enumerate() {
         for (ti, tab) in w.tabs.iter().enumerate() {
             for (pi, pane) in tab.panes.iter().enumerate() {
-                let hay = format!("{} {} {}", w.label, tab.label, pane.label).to_lowercase();
+                let hay = format!(
+                    "{} {} {} {} {}",
+                    w.label,
+                    tab.label,
+                    pane.label,
+                    pane.cwd.as_deref().unwrap_or(""),
+                    pane.agent.as_deref().unwrap_or(""),
+                )
+                .to_lowercase();
                 if q.is_empty() || hay.contains(&q) {
                     out.push(Loc { wi, ti, pi });
                 }
@@ -64,6 +73,24 @@ pub fn search_results(deck: &Deck, query: &str) -> Vec<Loc> {
     out
 }
 
+/// Panes that want your attention, worst first: everything `blocked` (an agent is
+/// waiting on you), then everything `done` (finished while you were away). `working`
+/// and idle panes are deliberately absent — they don't need you.
+pub fn attention_queue(deck: &Deck) -> Vec<Loc> {
+    let mut out: Vec<(u8, Loc)> = Vec::new();
+    for (wi, w) in deck.workspaces.iter().enumerate() {
+        for (ti, tab) in w.tabs.iter().enumerate() {
+            for (pi, pane) in tab.panes.iter().enumerate() {
+                if matches!(pane.status, Status::Blocked | Status::Done) {
+                    out.push((pane.status.rank(), Loc { wi, ti, pi }));
+                }
+            }
+        }
+    }
+    out.sort_by_key(|(rank, _)| *rank); // stable: deck order preserved within a rank
+    out.into_iter().map(|(_, loc)| loc).collect()
+}
+
 pub struct NavState {
     pub active: usize,     // selected workspace (the rail)
     pub sel: Vec<usize>,   // selected pane index (into workspace_panes) per workspace
@@ -71,6 +98,8 @@ pub struct NavState {
     pub mode: Mode,
     pub query: String,
     pub result_sel: usize, // selected row in the search results
+    /// Most-recent-first pane ids from previous sessions, for `r` (resume).
+    pub recent: Vec<String>,
 }
 
 impl NavState {
@@ -90,14 +119,75 @@ impl NavState {
                     .unwrap_or(0)
             })
             .collect();
-        NavState {
+        let mut st = NavState {
             active,
             sel,
             focus: Column::Rail,
             mode: Mode::Browse,
             query: String::new(),
             result_sel: 0,
+            recent: Vec::new(),
+        };
+        // Open on the answer, not the map: if an agent is waiting on you, put the
+        // cursor there so Enter goes straight to it. Otherwise resume where you were.
+        if let Some(&loc) = attention_queue(deck).first() {
+            st.goto(deck, loc);
         }
+        st
+    }
+
+    /// Put the cursor on `loc`, in the pane column.
+    fn goto(&mut self, deck: &Deck, loc: Loc) {
+        let Some(ws) = deck.workspaces.get(loc.wi) else { return };
+        let Some(idx) = workspace_panes(ws)
+            .iter()
+            .position(|&(ti, pi)| ti == loc.ti && pi == loc.pi)
+        else {
+            return;
+        };
+        self.active = loc.wi;
+        self.sel[loc.wi] = idx;
+        self.focus = Column::Panes;
+    }
+
+    /// Step through the attention queue; `delta` is +1 (Tab) or -1 (Shift-Tab).
+    fn cycle_attention(&mut self, deck: &Deck, delta: isize) {
+        let q = attention_queue(deck);
+        if q.is_empty() {
+            return;
+        }
+        let here = self.cursor_loc(deck);
+        let next = match here.and_then(|l| q.iter().position(|&x| x == l)) {
+            Some(i) => (i as isize + delta).rem_euclid(q.len() as isize) as usize,
+            // cursor isn't on a queue item: Tab enters at the top, Shift-Tab at the end.
+            None if delta > 0 => 0,
+            None => q.len() - 1,
+        };
+        self.goto(deck, q[next]);
+    }
+
+    /// Where the browse cursor currently sits, as a deck-wide location.
+    fn cursor_loc(&self, deck: &Deck) -> Option<Loc> {
+        let ws = deck.workspaces.get(self.active)?;
+        let &(ti, pi) = workspace_panes(ws).get(self.sel.get(self.active).copied()?)?;
+        Some(Loc {
+            wi: self.active,
+            ti,
+            pi,
+        })
+    }
+
+    /// The pane `r` jumps back to: the most recent one that still exists and isn't
+    /// the pane you came from.
+    fn resume_target(&self, deck: &Deck) -> Option<String> {
+        self.recent.iter().find_map(|id| {
+            deck.workspaces
+                .iter()
+                .flat_map(|w| w.tabs.iter())
+                .flat_map(|t| t.panes.iter())
+                .find(|p| &p.id == id && !p.is_current)
+                .map(|p| p.id.clone())
+        })
     }
 
     fn clamp_sel(&mut self, deck: &Deck) {
@@ -185,6 +275,20 @@ impl NavState {
                 }
                 Outcome::Redraw
             }
+            // Tab walks the attention queue — the whole point of the tool.
+            KeyCode::Tab => {
+                self.cycle_attention(deck, 1);
+                Outcome::Redraw
+            }
+            KeyCode::BackTab => {
+                self.cycle_attention(deck, -1);
+                Outcome::Redraw
+            }
+            // r resumes: alt-tab back to the pane you were in before this one.
+            KeyCode::Char('r') => match self.resume_target(deck) {
+                Some(id) => Outcome::Focus(FocusTarget::Pane(id)),
+                None => Outcome::Redraw,
+            },
             KeyCode::Enter => match self.browse_target(deck) {
                 Some(t) => Outcome::Focus(t),
                 None => Outcome::Redraw,
@@ -283,9 +387,11 @@ mod tests {
     }
 
     #[test]
-    fn starts_on_current_workspace() {
+    fn starts_on_the_pane_that_needs_you_over_the_focused_workspace() {
+        // w2 is the focused workspace, but infra's w3:p1 is blocked — that wins.
         let st = NavState::new(&deck());
-        assert_eq!(st.active, 1); // w2 focused
+        assert_eq!(st.active, 2);
+        assert_eq!(st.focus, Column::Panes);
     }
 
     #[test]
@@ -306,8 +412,8 @@ mod tests {
         let mut st = NavState::new(&d);
         st.active = 0;
         st.sel[0] = 0;
-        // default column is the rail: ↓ moves workspace
-        assert_eq!(st.focus, Column::Rail);
+        st.focus = Column::Rail;
+        // on the rail: ↓ moves workspace
         st.on_key(&d, KeyCode::Down);
         assert_eq!(st.active, 1);
         // → switches to the pane column: ↓ now moves panes
@@ -329,6 +435,7 @@ mod tests {
         let d = deck();
         let mut st = NavState::new(&d);
         st.active = 0;
+        st.focus = Column::Rail;
         // rail focus → workspace target
         match st.on_key(&d, KeyCode::Enter) {
             Outcome::Focus(FocusTarget::Workspace(id)) => assert_eq!(id, "w1"),
@@ -406,5 +513,169 @@ mod tests {
         let d = deck();
         let mut st = NavState::new(&d);
         assert!(matches!(st.on_key(&d, KeyCode::Esc), Outcome::Quit));
+    }
+
+    /// Two workspaces with a mix of statuses, used for attention-queue ordering.
+    const TRIAGE: &str = r#"
+    {"result":{"snapshot":{
+      "focused_workspace_id":"w1","focused_pane_id":"w1:p1",
+      "workspaces":[
+        {"workspace_id":"w1","label":"api","number":1},
+        {"workspace_id":"w2","label":"web","number":2}
+      ],
+      "tabs":[
+        {"tab_id":"w1:t1","workspace_id":"w1","label":"server","number":1},
+        {"tab_id":"w2:t1","workspace_id":"w2","label":"ui","number":1}
+      ],
+      "panes":[
+        {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle","label":"shell"},
+        {"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","agent_status":"done","label":"migrate"},
+        {"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","agent_status":"blocked","label":"review"},
+        {"pane_id":"w2:p2","tab_id":"w2:t1","workspace_id":"w2","agent_status":"working","label":"build"}
+      ]
+    }}}"#;
+
+    fn triage() -> Deck {
+        build_deck(TRIAGE, &Context::default()).unwrap()
+    }
+
+    #[test]
+    fn attention_queue_lists_blocked_before_done_and_skips_the_rest() {
+        let q = attention_queue(&triage());
+        // blocked (w2:p1) first, then done (w1:p2); working and idle are not "needs you"
+        assert_eq!(q, vec![Loc { wi: 1, ti: 0, pi: 0 }, Loc { wi: 0, ti: 0, pi: 1 }]);
+    }
+
+    #[test]
+    fn attention_queue_is_empty_when_nothing_needs_you() {
+        let d = build_deck(
+            r#"{"result":{"snapshot":{
+              "workspaces":[{"workspace_id":"w1","label":"api","number":1}],
+              "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"t","number":1}],
+              "panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle"}]
+            }}}"#,
+            &Context::default(),
+        )
+        .unwrap();
+        assert!(attention_queue(&d).is_empty());
+    }
+
+    #[test]
+    fn opens_on_the_first_attention_item_not_the_current_workspace() {
+        // w1 is the focused workspace, but w2:p1 is blocked — open there, in the
+        // pane column, so Enter goes straight to it.
+        let d = triage();
+        let st = NavState::new(&d);
+        assert_eq!(st.active, 1);
+        assert_eq!(st.sel[1], 0);
+        assert_eq!(st.focus, Column::Panes);
+    }
+
+    #[test]
+    fn opens_on_the_current_workspace_when_nothing_needs_you() {
+        let d = build_deck(
+            r#"{"result":{"snapshot":{
+              "focused_workspace_id":"w2","focused_pane_id":"w2:p1",
+              "workspaces":[
+                {"workspace_id":"w1","label":"api","number":1},
+                {"workspace_id":"w2","label":"web","number":2}
+              ],
+              "tabs":[
+                {"tab_id":"w1:t1","workspace_id":"w1","label":"t","number":1},
+                {"tab_id":"w2:t1","workspace_id":"w2","label":"t","number":1}
+              ],
+              "panes":[
+                {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle"},
+                {"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","agent_status":"idle"}
+              ]
+            }}}"#,
+            &Context::default(),
+        )
+        .unwrap();
+        let st = NavState::new(&d);
+        assert_eq!(st.active, 1);
+        assert_eq!(st.focus, Column::Rail);
+    }
+
+    #[test]
+    fn tab_cycles_forward_through_the_attention_queue_and_wraps() {
+        let d = triage();
+        let mut st = NavState::new(&d);
+        // starts on the blocked pane (queue slot 0)
+        assert_eq!((st.active, st.sel[st.active]), (1, 0));
+        st.on_key(&d, KeyCode::Tab); // → done pane in w1
+        assert_eq!((st.active, st.sel[st.active]), (0, 1));
+        st.on_key(&d, KeyCode::Tab); // wraps back to blocked
+        assert_eq!((st.active, st.sel[st.active]), (1, 0));
+    }
+
+    #[test]
+    fn shift_tab_cycles_backward_through_the_attention_queue() {
+        let d = triage();
+        let mut st = NavState::new(&d);
+        st.on_key(&d, KeyCode::BackTab); // from slot 0 wraps to the last slot
+        assert_eq!((st.active, st.sel[st.active]), (0, 1));
+    }
+
+    #[test]
+    fn tab_is_inert_when_nothing_needs_you() {
+        let d = deck(); // MINI: w3:p1 is the only attention item
+        let mut st = NavState::new(&d);
+        st.active = 0;
+        st.focus = Column::Rail;
+        let calm = build_deck(
+            r#"{"result":{"snapshot":{
+              "workspaces":[{"workspace_id":"w1","label":"api","number":1}],
+              "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"t","number":1}],
+              "panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle"}]
+            }}}"#,
+            &Context::default(),
+        )
+        .unwrap();
+        let mut st2 = NavState::new(&calm);
+        st2.on_key(&calm, KeyCode::Tab);
+        assert_eq!(st2.active, 0);
+        assert_eq!(st2.focus, Column::Rail);
+        let _ = st.active;
+    }
+
+    #[test]
+    fn search_matches_cwd_and_agent_not_just_labels() {
+        let d = build_deck(
+            r#"{"result":{"snapshot":{
+              "workspaces":[{"workspace_id":"w1","label":"api","number":1}],
+              "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"t","number":1}],
+              "panes":[
+                {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle",
+                 "label":"one","cwd":"/home/me/infra","agent":"claude"},
+                {"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle",
+                 "label":"two","cwd":"/home/me/web","agent":"codex"}
+              ]
+            }}}"#,
+            &Context::default(),
+        )
+        .unwrap();
+        assert_eq!(search_results(&d, "infra"), vec![Loc { wi: 0, ti: 0, pi: 0 }]);
+        assert_eq!(search_results(&d, "codex"), vec![Loc { wi: 0, ti: 0, pi: 1 }]);
+    }
+
+    #[test]
+    fn r_resumes_the_most_recent_pane_that_is_not_the_one_you_came_from() {
+        let d = triage(); // w1:p1 is_current (focused_pane_id)
+        let mut st = NavState::new(&d);
+        // most-recent-first; w1:p1 is where we are, w9:p9 no longer exists
+        st.recent = vec!["w1:p1".into(), "w9:p9".into(), "w2:p2".into()];
+        match st.on_key(&d, KeyCode::Char('r')) {
+            Outcome::Focus(FocusTarget::Pane(id)) => assert_eq!(id, "w2:p2"),
+            other => panic!("expected resume focus, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn r_does_nothing_without_a_resumable_pane() {
+        let d = triage();
+        let mut st = NavState::new(&d);
+        st.recent = vec!["w1:p1".into()]; // only the pane we came from
+        assert!(matches!(st.on_key(&d, KeyCode::Char('r')), Outcome::Redraw));
     }
 }

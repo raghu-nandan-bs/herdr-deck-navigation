@@ -1,6 +1,6 @@
 use crate::model::{Deck, Pane};
 use crate::state::{search_results, workspace_panes, Column, Mode, NavState};
-use crate::theme::Palette;
+use crate::theme::{Palette, Status};
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
@@ -70,14 +70,43 @@ fn hrule(frame: &mut Frame, area: Rect, p: &Palette) {
     );
 }
 
+/// What the top-right corner says. When agents want you, it says so — "3 agents
+/// finished while you were away" is the most useful sentence this tool can show.
+/// When nothing does, it falls back to the plain pane count.
+fn attention_summary(deck: &Deck) -> String {
+    let (mut blocked, mut done, mut total) = (0usize, 0usize, 0usize);
+    for pane in deck.workspaces.iter().flat_map(|w| w.tabs.iter()).flat_map(|t| t.panes.iter()) {
+        total += 1;
+        match pane.status {
+            Status::Blocked => blocked += 1,
+            Status::Done => done += 1,
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if blocked > 0 {
+        parts.push(format!("{blocked} blocked"));
+    }
+    if done > 0 {
+        parts.push(format!("{done} done"));
+    }
+    if parts.is_empty() {
+        format!("{total} panes")
+    } else {
+        parts.join(" · ")
+    }
+}
+
 fn render_topbar(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Palette) {
-    let total: usize = deck
+    let summary = attention_summary(deck);
+    let urgent = deck
         .workspaces
         .iter()
         .flat_map(|w| w.tabs.iter())
-        .map(|t| t.panes.len())
-        .sum();
-    let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(12)]).split(area);
+        .flat_map(|t| t.panes.iter())
+        .any(|p| matches!(p.status, Status::Blocked));
+    let right_w = (summary.chars().count() + 2) as u16;
+    let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(right_w)]).split(area);
 
     let mut left = vec![Span::styled(
         "  / ",
@@ -89,16 +118,20 @@ fn render_topbar(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &
             left.push(Span::styled("▏", Style::default().fg(p.accent)));
         }
         Mode::Search => left.push(Span::styled("search panes…", Style::default().fg(p.overlay0))),
+        // Truncated to its own column so it can never run into the summary.
         Mode::Browse => left.push(Span::styled(
-            "press / to search · 1–9 to jump",
+            truncate(
+                "tab for whoever needs you · / to search",
+                (cols[0].width as usize).saturating_sub(5),
+            ),
             Style::default().fg(p.overlay0),
         )),
     }
     frame.render_widget(Paragraph::new(Line::from(left)), cols[0]);
     frame.render_widget(
-        Paragraph::new(format!("{total} panes  "))
+        Paragraph::new(format!("{summary}  "))
             .alignment(Alignment::Right)
-            .style(Style::default().fg(p.overlay0)),
+            .style(Style::default().fg(if urgent { p.red } else { p.overlay0 })),
         cols[1],
     );
 }
@@ -169,7 +202,8 @@ fn render_rail(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Pa
             Span::styled("  ", bg),
         ]));
     }
-    frame.render_widget(Paragraph::new(lines), list);
+    let offset = scroll_offset(st.active, list.height as usize, lines.len());
+    frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), list);
 }
 
 fn render_focus(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Palette) {
@@ -353,16 +387,39 @@ fn render_results(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: 
     frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
 }
 
+/// Browse-mode footer hints, most important first, trimmed from the end until they
+/// fit `width`. `tab` is the product, so it goes first and is the last to go.
+fn browse_hints(width: usize) -> Vec<(&'static str, &'static str)> {
+    let all: [(&str, &str); 7] = [
+        ("tab", " needs you   "),
+        ("r", " resume   "),
+        ("← →", " column   "),
+        ("↑ ↓", " move   "),
+        ("/", " search   "),
+        ("↵", " switch   "),
+        ("esc", " close"),
+    ];
+    let mut hints = all.to_vec();
+    while hints.len() > 1
+        && hints
+            .iter()
+            .map(|(k, d)| k.chars().count() + d.chars().count())
+            .sum::<usize>()
+            > width
+    {
+        hints.pop();
+    }
+    hints
+}
+
 fn render_footer(frame: &mut Frame, area: Rect, st: &NavState, p: &Palette) {
     let line = match st.mode {
-        Mode::Browse => Line::from(vec![
-            key("← →", p), dim(" column   ", p),
-            key("↑ ↓", p), dim(" move   ", p),
-            key("1–9", p), dim(" jump   ", p),
-            key("/", p), dim(" search   ", p),
-            key("↵", p), dim(" switch   ", p),
-            key("esc", p), dim(" close", p),
-        ]),
+        Mode::Browse => Line::from(
+            browse_hints(area.width as usize)
+                .into_iter()
+                .flat_map(|(k, d)| [key(k, p), dim(d, p)])
+                .collect::<Vec<_>>(),
+        ),
         Mode::Search => Line::from(vec![
             dim("type to filter   ", p),
             key("↑ ↓", p), dim(" select   ", p),
@@ -512,5 +569,125 @@ mod tests {
         term.draw(|f| render(f, &deck, &st, &pal)).unwrap();
         let buf = term.backend().buffer();
         assert_eq!(buf.cell((70, 10)).unwrap().bg, pal.panel_bg);
+    }
+
+    /// Render an arbitrary snapshot, with a hook to adjust the cursor first.
+    fn draw_json(json: &str, setup: impl FnOnce(&mut NavState), w: u16, h: u16) -> String {
+        let deck = build_deck(json, &Context::default()).unwrap();
+        let mut st = NavState::new(&deck);
+        setup(&mut st);
+        let pal = Palette::catppuccin();
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| render(f, &deck, &st, &pal)).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..h)
+            .map(|y| (0..w).map(|x| buf.cell((x, y)).unwrap().symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// `n` workspaces, one idle pane each — more than fit in a short rail.
+    fn many_workspaces(n: usize) -> String {
+        let ws: Vec<String> = (1..=n)
+            .map(|i| format!(r#"{{"workspace_id":"w{i}","label":"ws-{i}","number":{i}}}"#))
+            .collect();
+        let tabs: Vec<String> = (1..=n)
+            .map(|i| format!(r#"{{"tab_id":"w{i}:t1","workspace_id":"w{i}","label":"t","number":1}}"#))
+            .collect();
+        let panes: Vec<String> = (1..=n)
+            .map(|i| format!(
+                r#"{{"pane_id":"w{i}:p1","tab_id":"w{i}:t1","workspace_id":"w{i}","agent_status":"idle","label":"p{i}"}}"#
+            ))
+            .collect();
+        format!(
+            r#"{{"result":{{"snapshot":{{"workspaces":[{}],"tabs":[{}],"panes":[{}]}}}}}}"#,
+            ws.join(","), tabs.join(","), panes.join(",")
+        )
+    }
+
+    #[test]
+    fn rail_scrolls_to_keep_the_active_workspace_visible() {
+        let json = many_workspaces(20);
+        // 14 rows total leaves the rail ~8 lines: ws-20 only shows if the rail scrolls.
+        let s = draw_json(&json, |st| st.active = 19, 90, 14);
+        assert!(s.contains("ws-20"), "active workspace must be visible:\n{s}");
+        assert!(!s.contains("ws-1 "), "top of a scrolled rail is off-screen:\n{s}");
+    }
+
+    #[test]
+    fn attention_summary_counts_blocked_and_done_across_the_deck() {
+        let calm = build_deck(&many_workspaces(2), &Context::default()).unwrap();
+        assert_eq!(attention_summary(&calm), "2 panes");
+
+        let busy = build_deck(
+            r#"{"result":{"snapshot":{
+              "workspaces":[{"workspace_id":"w1","label":"a","number":1}],
+              "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"t","number":1}],
+              "panes":[
+                {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"blocked"},
+                {"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","agent_status":"done"},
+                {"pane_id":"w1:p3","tab_id":"w1:t1","workspace_id":"w1","agent_status":"done"},
+                {"pane_id":"w1:p4","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle"}
+              ]
+            }}}"#,
+            &Context::default(),
+        )
+        .unwrap();
+        assert_eq!(attention_summary(&busy), "1 blocked · 2 done");
+    }
+
+    #[test]
+    fn topbar_shows_the_attention_summary() {
+        let s = draw(|_| {}, 90, 18); // MINI has one blocked pane
+        assert!(s.contains("1 blocked"), "topbar summary:\n{s}");
+    }
+
+    #[test]
+    fn footer_offers_tab_and_resume() {
+        let s = draw(|_| {}, 100, 18);
+        assert!(s.contains("tab"), "tab hint:\n{s}");
+        assert!(s.contains("resume"), "resume hint:\n{s}");
+    }
+
+    fn footer_width(hints: &[(&str, &str)]) -> usize {
+        hints.iter().map(|(k, d)| k.chars().count() + d.chars().count()).sum()
+    }
+
+    #[test]
+    fn footer_drops_the_least_important_hints_to_fit_a_narrow_terminal() {
+        let wide = browse_hints(120);
+        assert!(footer_width(&wide) <= 120);
+        assert_eq!(wide.len(), 7, "everything fits at 120 cols");
+
+        for w in [40usize, 60, 78, 90] {
+            let hints = browse_hints(w);
+            assert!(footer_width(&hints) <= w, "clips at {w}: {hints:?}");
+            assert_eq!(hints[0].0, "tab", "tab survives every width");
+        }
+    }
+
+    #[test]
+    fn footer_keeps_the_core_hints_at_the_documented_minimum_width() {
+        // 24 cols is the narrowest terminal render() will draw at all.
+        let hints = browse_hints(24);
+        assert!(footer_width(&hints) <= 24);
+        assert!(!hints.is_empty());
+    }
+
+    #[test]
+    fn topbar_hint_never_collides_with_the_summary() {
+        // A long summary ("1 blocked · 2 done") plus the hint overflows 56 cols.
+        let json = r#"{"result":{"snapshot":{
+          "workspaces":[{"workspace_id":"w1","label":"a","number":1}],
+          "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"t","number":1}],
+          "panes":[
+            {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"blocked"},
+            {"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","agent_status":"done"},
+            {"pane_id":"w1:p3","tab_id":"w1:t1","workspace_id":"w1","agent_status":"done"}]
+        }}}"#;
+        let s = draw_json(json, |_| {}, 56, 14);
+        let top = s.lines().next().unwrap();
+        assert!(top.contains("1 blocked · 2 done"), "summary intact:\n{top}");
+        assert!(top.contains(" 1 blocked"), "summary needs clear space:\n{top}");
     }
 }

@@ -614,9 +614,18 @@ impl Palette {
     /// (including `auto_switch` between `dark_name`/`light_name` based on
     /// macOS appearance), apply any color overrides, and fall back to
     /// `Palette::catppuccin()` on any failure. Never panics.
+    /// The palette to use when herdr's config doesn't name one: follow the OS
+    /// appearance rather than always landing on a dark theme.
+    pub fn default_for_appearance(is_dark: Option<bool>) -> Palette {
+        match is_dark {
+            Some(false) => Palette::catppuccin_latte(),
+            _ => Palette::catppuccin(),
+        }
+    }
+
     pub fn resolve() -> Palette {
         let Some(config) = read_config() else {
-            return Palette::catppuccin();
+            return Palette::default_for_appearance(detect_dark());
         };
 
         let theme = config.theme;
@@ -631,7 +640,7 @@ impl Palette {
         let mut palette = chosen_name
             .as_deref()
             .and_then(Palette::from_name)
-            .unwrap_or_else(Palette::catppuccin);
+            .unwrap_or_else(|| Palette::default_for_appearance(detect_dark()));
 
         // herdr's own config key is `[theme.custom]`; also accept
         // `[theme.colors]` as documented for this plugin.
@@ -823,5 +832,16 @@ mod tests {
             name_for_appearance(&theme, false).as_deref(),
             Some("rose-pine-dawn")
         );
+    }
+
+    #[test]
+    fn unconfigured_theme_follows_the_os_appearance() {
+        let light = Palette::default_for_appearance(Some(false));
+        let dark = Palette::default_for_appearance(Some(true));
+        assert_eq!(light.panel_bg, Palette::catppuccin_latte().panel_bg);
+        assert_eq!(dark.panel_bg, Palette::catppuccin().panel_bg);
+        assert_ne!(light.panel_bg, dark.panel_bg);
+        // undetectable (non-macOS) keeps the previous dark default
+        assert_eq!(Palette::default_for_appearance(None).panel_bg, dark.panel_bg);
     }
 }

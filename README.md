@@ -26,6 +26,11 @@ list that has no opinion about that. **Deck** does.
   tab needs you   r resume   ← → column   ↑ ↓ move   / search   ↵ switch
 ```
 
+Deck draws as a **floating panel**: a rounded, opaque card sized to its content and
+centred in the tab, with your terminal showing through around it. On a large screen you
+get a panel, not a mostly-empty full-screen app; on a small one it fills the space rather
+than wasting rows on a margin.
+
 The top-right corner is the headline: `1 blocked · 3 done` in red when someone's waiting,
 falling back to a plain pane count when nothing needs you. The active row gets a soft
 full-width highlight; counts align into a column; the focused workspace's `◉ ◍ ● ✓`
@@ -132,7 +137,8 @@ which closes when you make a choice. The binary reads `session.snapshot` over he
 socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders with
 [ratatui](https://ratatui.rs), and on `Enter` issues `pane.focus` (or `workspace.focus`)
 before exiting. Colors follow **your herdr theme** — it reads `~/.config/herdr/config.toml`
-and matches your active light/dark theme, falling back to Catppuccin. It re-reads the
+and matches your active light/dark theme. With no theme configured it follows the OS
+appearance (macOS light/dark), falling back to Catppuccin Mocha when it can't tell. It re-reads the
 snapshot on a ~1s idle tick, so a left-open navigator keeps up with renames, new panes,
 and agent-status changes without reopening — including the attention queue, so a pane that
 becomes blocked while you're looking joins the `tab` cycle.
@@ -150,6 +156,10 @@ becomes blocked while you're looking joins the `tab` cycle.
 | done | `●` teal | finished, unseen |
 | idle | `✓` green | idle / seen |
 | unknown | `○` grey | plain shell |
+
+The same glyphs appear in the workspace rail, showing each workspace's **worst** agent
+state — so a blocked workspace is distinguishable without relying on colour. The pane
+you're currently sitting in is tagged `here`.
 
 ## Troubleshooting
 

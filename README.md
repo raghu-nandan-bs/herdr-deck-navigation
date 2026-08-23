@@ -26,6 +26,36 @@ list that has no opinion about that. **Deck** does.
   tab needs you   r resume   ← → column   ↑ ↓ move   / search   ↵ switch
 ```
 
+### Glass
+
+By default the panel is opaque, so it stays readable over any wallpaper. If your terminal
+is translucent (Ghostty's `background-opacity` / `background-blur-radius`, or equivalent),
+turn the panel see-through by creating `~/.config/herdr/deck.toml`:
+
+```toml
+glass = true
+```
+
+`HERDR_DECK_GLASS=1` / `=0` overrides the file for one run. In glass mode Deck skips its
+background fills entirely — the border, text, and the selected-row highlight stay, and
+your terminal's own blur shows through everything else. On an opaque terminal this just
+shows the plain terminal background, which is why it is off by default.
+
+### Theme
+
+Colors follow herdr's theme. **For Deck to follow your OS light/dark appearance, herdr's
+config must opt into switching** — `auto_switch = false` pins whatever `name` says, which
+is the usual reason a light desktop still gets a dark panel:
+
+```toml
+[theme]
+auto_switch = true              # <- required; false pins `name`
+dark_name  = "tokyo-night"
+light_name = "tokyo-night-day"
+```
+
+With no theme configured at all, Deck follows the OS appearance on its own.
+
 Deck draws as a **floating panel**: a rounded, opaque card sized to its content and
 centred in the tab, with your terminal showing through around it. On a large screen you
 get a panel, not a mostly-empty full-screen app; on a small one it fills the space rather
@@ -136,9 +166,8 @@ herdr launches the `herdr-deck` binary in its **own throwaway tab** (`--placemen
 which closes when you make a choice. The binary reads `session.snapshot` over herdr's
 socket (`HERDR_SOCKET_PATH`, newline-delimited JSON), renders with
 [ratatui](https://ratatui.rs), and on `Enter` issues `pane.focus` (or `workspace.focus`)
-before exiting. Colors follow **your herdr theme** — it reads `~/.config/herdr/config.toml`
-and matches your active light/dark theme. With no theme configured it follows the OS
-appearance (macOS light/dark), falling back to Catppuccin Mocha when it can't tell. It re-reads the
+before exiting. Colors follow **your herdr theme** — see the Theme section above for the `auto_switch`
+requirement. It re-reads the
 snapshot on a ~1s idle tick, so a left-open navigator keeps up with renames, new panes,
 and agent-status changes without reopening — including the attention queue, so a pane that
 becomes blocked while you're looking joins the `tab` cycle.

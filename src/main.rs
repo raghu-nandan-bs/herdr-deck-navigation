@@ -18,7 +18,7 @@ use std::io::stdout;
 fn main() -> Result<()> {
     let path = client::socket_path()?;
     let ctx = model::Context::from_env();
-    let palette = theme::Palette::resolve();
+    let look = theme::Look::resolve();
     let snapshot = client::snapshot(&path)?;
     let mut deck = model::build_deck(&snapshot, &ctx)?;
     if deck.workspaces.is_empty() {
@@ -36,7 +36,7 @@ fn main() -> Result<()> {
     execute!(stdout(), EnterAlternateScreen)?;
     let mut term = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    let result = run(&mut term, &path, &ctx, &mut deck, &mut st, &palette);
+    let result = run(&mut term, &path, &ctx, &mut deck, &mut st, &look);
 
     disable_raw_mode()?;
     execute!(term.backend_mut(), LeaveAlternateScreen)?;
@@ -62,11 +62,11 @@ fn run(
     ctx: &model::Context,
     deck: &mut model::Deck,
     st: &mut NavState,
-    palette: &theme::Palette,
+    look: &theme::Look,
 ) -> Result<Option<state::FocusTarget>> {
     use std::time::Duration;
     loop {
-        term.draw(|f| ui::render(f, deck, st, palette))?;
+        term.draw(|f| ui::render(f, deck, st, look))?;
         // Poll so a left-open deck refreshes itself: renames, new panes, and
         // agent-status changes show up without reopening.
         if event::poll(Duration::from_millis(1000))? {

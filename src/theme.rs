@@ -627,12 +627,19 @@ impl Palette {
         let Some(config) = read_config() else {
             return Palette::default_for_appearance(detect_dark());
         };
+        resolve_with(config, detect_dark())
+    }
+}
 
+/// The theme decision, separated from reading the config and asking the OS so it
+/// can be tested. `is_dark` is the OS appearance: `None` when undetectable.
+fn resolve_with(config: ConfigFile, is_dark: Option<bool>) -> Palette {
+    {
         let theme = config.theme;
 
         let chosen_name = if theme.auto_switch && theme.dark_name.is_some() && theme.light_name.is_some()
         {
-            resolve_auto_switch_name(&theme)
+            resolve_auto_switch_name(&theme, is_dark)
         } else {
             theme.name.clone()
         };
@@ -640,7 +647,7 @@ impl Palette {
         let mut palette = chosen_name
             .as_deref()
             .and_then(Palette::from_name)
-            .unwrap_or_else(|| Palette::default_for_appearance(detect_dark()));
+            .unwrap_or_else(|| Palette::default_for_appearance(is_dark));
 
         // herdr's own config key is `[theme.custom]`; also accept
         // `[theme.colors]` as documented for this plugin.
@@ -654,8 +661,8 @@ impl Palette {
 
 /// Pick between `dark_name` and `light_name` based on macOS appearance.
 /// Only called when both are known to be present.
-fn resolve_auto_switch_name(theme: &ThemeSection) -> Option<String> {
-    match detect_dark() {
+fn resolve_auto_switch_name(theme: &ThemeSection, is_dark: Option<bool>) -> Option<String> {
+    match is_dark {
         Some(is_dark) => name_for_appearance(theme, is_dark),
         // Couldn't determine appearance (non-macOS, or `defaults` unavailable).
         None => theme.dark_name.clone().or_else(|| theme.name.clone()),
@@ -688,6 +695,54 @@ fn detect_dark() -> Option<bool> {
         }
         Err(_) => None,
     }
+}
+
+/// How Deck should look: colours plus whether the panel is see-through.
+pub struct Look {
+    pub palette: Palette,
+    /// Skip the panel's background fill so the terminal's own transparency and
+    /// blur show through. Requires a translucent terminal (e.g. Ghostty's
+    /// `background-opacity` / `background-blur-radius`); on an opaque one it just
+    /// shows the plain terminal background.
+    pub glass: bool,
+}
+
+impl Look {
+    pub fn resolve() -> Look {
+        Look {
+            palette: Palette::resolve(),
+            glass: glass_setting(
+                std::env::var("HERDR_DECK_GLASS").ok().as_deref(),
+                deck_config().as_deref(),
+            ),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct DeckConfig {
+    glass: bool,
+}
+
+/// `HERDR_DECK_GLASS` wins; otherwise `~/.config/herdr/deck.toml`; otherwise off.
+/// Unparseable input in either place means "off", never an error.
+fn glass_setting(env: Option<&str>, file: Option<&str>) -> bool {
+    if let Some(raw) = env {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => return true,
+            "0" | "false" | "no" | "off" => return false,
+            _ => {}
+        }
+    }
+    file.and_then(|src| toml::from_str::<DeckConfig>(src).ok())
+        .map(|c| c.glass)
+        .unwrap_or(false)
+}
+
+fn deck_config() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    std::fs::read_to_string(std::path::PathBuf::from(home).join(".config/herdr/deck.toml")).ok()
 }
 
 /// Read and parse `~/.config/herdr/config.toml`. Returns `None` on any
@@ -843,5 +898,55 @@ mod tests {
         assert_ne!(light.panel_bg, dark.panel_bg);
         // undetectable (non-macOS) keeps the previous dark default
         assert_eq!(Palette::default_for_appearance(None).panel_bg, dark.panel_bg);
+    }
+
+    /// The user's real herdr config, verbatim in shape.
+    const USER_CONFIG: &str = r#"
+onboarding = false
+[theme]
+auto_switch = false
+dark_name = "tokyo-night"
+light_name = "tokyo-night-day"
+name = "tokyo-night"
+"#;
+
+    fn resolve_str(toml_src: &str, is_dark: Option<bool>) -> Palette {
+        resolve_with(toml::from_str(toml_src).unwrap(), is_dark)
+    }
+
+    #[test]
+    fn auto_switch_off_pins_the_named_theme_even_in_light_mode() {
+        // This is why a light desktop still gets a dark panel: the config opted out
+        // of switching, and an explicit `name` outranks the OS appearance.
+        let p = resolve_str(USER_CONFIG, Some(false));
+        assert_eq!(p.panel_bg, Palette::tokyo_night().panel_bg);
+    }
+
+    #[test]
+    fn auto_switch_on_follows_the_os_appearance() {
+        let cfg = USER_CONFIG.replace("auto_switch = false", "auto_switch = true");
+        assert_eq!(
+            resolve_str(&cfg, Some(false)).panel_bg,
+            Palette::tokyo_night_day().panel_bg,
+            "light mode picks light_name"
+        );
+        assert_eq!(
+            resolve_str(&cfg, Some(true)).panel_bg,
+            Palette::tokyo_night().panel_bg,
+            "dark mode picks dark_name"
+        );
+    }
+
+    #[test]
+    fn glass_setting_prefers_env_then_file_then_off() {
+        assert!(!glass_setting(None, None), "opaque by default");
+        assert!(glass_setting(None, Some("glass = true")));
+        assert!(!glass_setting(None, Some("glass = false")));
+        // env wins over the file, in both directions
+        assert!(glass_setting(Some("1"), Some("glass = false")));
+        assert!(!glass_setting(Some("0"), Some("glass = true")));
+        assert!(glass_setting(Some("true"), None));
+        // junk in either place is not a reason to fail
+        assert!(!glass_setting(Some("banana"), Some("nonsense = [")));
     }
 }

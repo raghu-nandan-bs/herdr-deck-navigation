@@ -1,6 +1,6 @@
 use crate::model::{Deck, Pane};
 use crate::state::{search_results, workspace_panes, Column, Mode, NavState};
-use crate::theme::{Palette, Status};
+use crate::theme::{Look, Palette, Status};
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
@@ -68,6 +68,16 @@ pub fn card_rect(area: Rect, deck: &Deck) -> Rect {
     Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
 }
 
+/// A chrome band's style: filled when opaque, bare in glass mode so the terminal's
+/// own blur shows through.
+fn band(glass: bool, bg: ratatui::style::Color) -> Style {
+    if glass {
+        Style::default()
+    } else {
+        Style::default().bg(bg)
+    }
+}
+
 /// Brighten the top border to read as a lit glass edge.
 fn glass_edge(frame: &mut Frame, card: Rect, p: &Palette) {
     if card.width < 3 {
@@ -81,7 +91,8 @@ fn glass_edge(frame: &mut Frame, card: Rect, p: &Palette) {
     }
 }
 
-pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
+pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, look: &Look) {
+    let p = &look.palette;
     let area = frame.area();
     if deck.workspaces.is_empty() || area.width < 24 || area.height < 8 {
         frame.render_widget(Block::default().style(Style::default().bg(p.panel_bg)), area);
@@ -95,10 +106,12 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
     // The panel is opaque (readable over any wallpaper); everything outside it is
     // left untouched, which is what makes it read as floating rather than full-bleed.
     let card = card_rect(area, deck);
-    let shell = Block::bordered()
+    let mut shell = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(p.surface1))
-        .style(Style::default().bg(p.panel_bg));
+        .border_style(Style::default().fg(p.surface1));
+    if !look.glass {
+        shell = shell.style(Style::default().bg(p.panel_bg));
+    }
     let band = shell.inner(card);
     frame.render_widget(shell, card);
     glass_edge(frame, card, p);
@@ -113,16 +126,19 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
     ])
     .split(band);
 
-    // Frosted chrome: header and footer bands sit a shade above the panel.
-    for row in [v[0], v[5]] {
-        frame.render_widget(Block::default().style(Style::default().bg(p.surface0)), row);
+    // Frosted chrome: header and footer bands sit a shade above the panel. In glass
+    // mode they're left unpainted too, so the whole panel stays see-through.
+    if !look.glass {
+        for row in [v[0], v[5]] {
+            frame.render_widget(Block::default().style(Style::default().bg(p.surface0)), row);
+        }
     }
 
     // Pad the content in by a column so nothing hugs the border.
     let pad = |r: Rect| Rect::new(r.x + 1, r.y, r.width.saturating_sub(2), r.height);
 
-    render_topbar(frame, pad(v[0]), deck, st, p);
-    hrule(frame, card, v[1].y, p);
+    render_topbar(frame, pad(v[0]), deck, st, p, look.glass);
+    hrule(frame, card, v[1].y, p, look.glass);
 
     match st.mode {
         Mode::Browse => {
@@ -135,18 +151,17 @@ pub fn render(frame: &mut Frame, deck: &Deck, st: &NavState, p: &Palette) {
         Mode::Search => render_results(frame, pad(v[2]), deck, st, p),
     }
 
-    hrule(frame, card, v[3].y, p);
+    hrule(frame, card, v[3].y, p, look.glass);
     render_detail(frame, pad(v[4]), deck, st, p);
-    render_footer(frame, pad(v[5]), st, p);
+    render_footer(frame, pad(v[5]), st, p, look.glass);
 }
 
 /// A divider drawn edge to edge, joining the rounded border with ├ ┤ rather than
 /// butting a bare rule against the wall.
-fn hrule(frame: &mut Frame, card: Rect, y: u16, p: &Palette) {
+fn hrule(frame: &mut Frame, card: Rect, y: u16, p: &Palette, glass: bool) {
     let inner = card.width.saturating_sub(2) as usize;
     frame.render_widget(
-        Paragraph::new(format!("├{}┤", "─".repeat(inner)))
-            .style(Style::default().fg(p.surface1).bg(p.panel_bg)),
+        Paragraph::new(format!("├{}┤", "─".repeat(inner))).style(band(glass, p.panel_bg).fg(p.surface1)),
         Rect::new(card.x, y, card.width, 1),
     );
 }
@@ -178,7 +193,7 @@ fn attention_summary(deck: &Deck) -> String {
     }
 }
 
-fn render_topbar(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Palette) {
+fn render_topbar(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Palette, glass: bool) {
     let summary = attention_summary(deck);
     let urgent = deck
         .workspaces
@@ -209,13 +224,13 @@ fn render_topbar(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &
         )),
     }
     frame.render_widget(
-        Paragraph::new(Line::from(left)).style(Style::default().bg(p.surface0)),
+        Paragraph::new(Line::from(left)).style(band(glass, p.surface0)),
         cols[0],
     );
     frame.render_widget(
         Paragraph::new(format!("{summary}  "))
             .alignment(Alignment::Right)
-            .style(Style::default().fg(if urgent { p.red } else { p.overlay0 }).bg(p.surface0)),
+            .style(band(glass, p.surface0).fg(if urgent { p.red } else { p.overlay0 })),
         cols[1],
     );
 }
@@ -417,19 +432,32 @@ fn render_detail(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &
     };
     let Some(pane) = pane else { return };
 
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(cwd) = &pane.cwd {
-        parts.push(shorten_path(cwd));
-    }
-    parts.push(pane.label.clone());
+    // Built tail-first: the status is the point of the strip, so a long cwd is what
+    // gets elided, not the thing you came here to read.
+    let mut tail: Vec<String> = vec![pane.label.clone()];
     // Panes are often labelled after their agent; saying "claude · claude" is noise.
     if let Some(agent) = pane.agent.as_deref().filter(|a| *a != pane.label) {
-        parts.push(agent.to_string());
+        tail.push(agent.to_string());
     }
-    parts.push(pane.status.label().to_string());
+    tail.push(pane.status.label().to_string());
+    let tail = tail.join(" · ");
+
+    let budget = area.width.saturating_sub(2) as usize;
+    let line = match pane.cwd.as_deref().map(shorten_path) {
+        Some(cwd) if cwd.chars().count() + tail.chars().count() + 3 <= budget => {
+            format!("{cwd} · {tail}")
+        }
+        // Elide the head of the path — the last components identify it.
+        Some(cwd) if tail.chars().count() + 6 <= budget => {
+            let room = budget - tail.chars().count() - 3;
+            let kept: String = cwd.chars().skip(cwd.chars().count().saturating_sub(room - 1)).collect();
+            format!("…{kept} · {tail}")
+        }
+        _ => truncate(&tail, budget),
+    };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!("  {}", parts.join(" · ")),
+            format!("  {line}"),
             Style::default().fg(p.overlay0),
         ))),
         area,
@@ -508,7 +536,7 @@ fn browse_hints(width: usize) -> Vec<(&'static str, &'static str)> {
     hints
 }
 
-fn render_footer(frame: &mut Frame, area: Rect, st: &NavState, p: &Palette) {
+fn render_footer(frame: &mut Frame, area: Rect, st: &NavState, p: &Palette, glass: bool) {
     let line = match st.mode {
         Mode::Browse => Line::from(
             browse_hints(area.width as usize)
@@ -526,7 +554,7 @@ fn render_footer(frame: &mut Frame, area: Rect, st: &NavState, p: &Palette) {
     frame.render_widget(
         Paragraph::new(line)
             .alignment(Alignment::Center)
-            .style(Style::default().bg(p.surface0)),
+            .style(band(glass, p.surface0)),
         area,
     );
 }
@@ -597,9 +625,9 @@ mod tests {
         let deck = build_deck(MINI, &Context::default()).unwrap();
         let mut st = NavState::new(&deck);
         setup(&mut st);
-        let pal = Palette::catppuccin();
+        let look = Look { palette: Palette::catppuccin(), glass: false };
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        term.draw(|f| render(f, &deck, &st, &pal)).unwrap();
+        term.draw(|f| render(f, &deck, &st, &look)).unwrap();
         let buf = term.backend().buffer().clone();
         (0..h)
             .map(|y| (0..w).map(|x| buf.cell((x, y)).unwrap().symbol().to_string()).collect::<String>())
@@ -656,9 +684,9 @@ mod tests {
         let deck = build_deck(json, &Context::default()).unwrap();
         let mut st = NavState::new(&deck);
         setup(&mut st);
-        let pal = Palette::catppuccin();
+        let look = Look { palette: Palette::catppuccin(), glass: false };
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        term.draw(|f| render(f, &deck, &st, &pal)).unwrap();
+        term.draw(|f| render(f, &deck, &st, &look)).unwrap();
         let buf = term.backend().buffer().clone();
         (0..h)
             .map(|y| (0..w).map(|x| buf.cell((x, y)).unwrap().symbol().to_string()).collect::<String>())
@@ -802,9 +830,9 @@ mod tests {
         // the panel is fully opaque so it stays readable over any wallpaper.
         let deck = build_deck(MINI, &Context::default()).unwrap();
         let st = NavState::new(&deck);
-        let pal = Palette::catppuccin();
+        let look = Look { palette: Palette::catppuccin(), glass: false };
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        term.draw(|f| render(f, &deck, &st, &pal)).unwrap();
+        term.draw(|f| render(f, &deck, &st, &look)).unwrap();
         let buf = term.backend().buffer();
         assert_eq!(buf.cell((0, 0)).unwrap().bg, ratatui::style::Color::Reset, "outside is transparent");
         let card = card_rect(Rect::new(0, 0, 120, 40), &deck);
@@ -891,5 +919,61 @@ mod tests {
         let row = s.lines().find(|l| l.contains("/Users/me/code")).expect("detail strip");
         assert!(!row.contains("claude · claude"), "agent said twice:\n{row}");
         assert!(row.contains("claude"), "agent still shown:\n{row}");
+    }
+
+    fn bg_at(glass: bool, x: u16, y: u16) -> ratatui::style::Color {
+        let deck = build_deck(MINI, &Context::default()).unwrap();
+        let st = NavState::new(&deck);
+        let look = Look { palette: Palette::catppuccin(), glass };
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| render(f, &deck, &st, &look)).unwrap();
+        term.backend().buffer().cell((x, y)).unwrap().bg
+    }
+
+    #[test]
+    fn glass_mode_leaves_the_panel_unpainted_so_the_terminal_shows_through() {
+        let deck = build_deck(MINI, &Context::default()).unwrap();
+        let card = card_rect(Rect::new(0, 0, 120, 40), &deck);
+        let body = (card.x + card.width / 2, card.y + card.height / 2);
+        let header = (card.x + card.width / 2, card.y + 1);
+
+        // opaque (the default) paints both the body and the chrome bands
+        assert_ne!(bg_at(false, body.0, body.1), ratatui::style::Color::Reset);
+        assert_ne!(bg_at(false, header.0, header.1), ratatui::style::Color::Reset);
+        // glass paints neither, so the terminal's blur comes through
+        assert_eq!(bg_at(true, body.0, body.1), ratatui::style::Color::Reset);
+        assert_eq!(bg_at(true, header.0, header.1), ratatui::style::Color::Reset);
+    }
+
+    #[test]
+    fn glass_mode_keeps_the_border_and_the_text() {
+        let deck = build_deck(MINI, &Context::default()).unwrap();
+        let st = NavState::new(&deck);
+        let look = Look { palette: Palette::catppuccin(), glass: true };
+        let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        term.draw(|f| render(f, &deck, &st, &look)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let s: String = (0..40)
+            .map(|y| (0..120).map(|x| buf.cell((x, y)).unwrap().symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(s.contains('╭'), "border survives glass:\n{s}");
+        assert!(s.contains("WORKSPACES"), "text survives glass:\n{s}");
+    }
+
+    #[test]
+    fn detail_strip_is_truncated_to_the_panel_instead_of_being_cut_off() {
+        let json = r#"{"result":{"snapshot":{
+          "focused_workspace_id":"w1","focused_pane_id":"w1:p1",
+          "workspaces":[{"workspace_id":"w1","label":"a","number":1}],
+          "tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"t","number":1}],
+          "panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"idle",
+                    "label":"pane 2","agent":"claude",
+                    "cwd":"/very/deeply/nested/path/that/keeps/going/and/going/herdr-card-style-navigation"}]
+        }}}"#;
+        let s = draw_json(json, |_| {}, 90, 30);
+        let row = s.lines().find(|l| l.contains("idle") || l.contains('…')).expect("detail strip");
+        // the status is the point of the strip — it must not be the bit that falls off
+        assert!(row.contains("idle"), "status survives truncation:\n{row}");
     }
 }

@@ -13,17 +13,19 @@ list that has no opinion about that. **Deck** does.
   selected workspace's tabs & panes, and **`/` search** over every pane's name, path, and agent.
 
 ```
-  / tab for whoever needs you · / to search          1 blocked · 3 done
- ─────────────────────────────────────────────────────────────────────
-  WORKSPACES              │  LOAD-GENERATOR              ◉0 ◍1 ●0 ✓1
-                          │
- ▌1 ● esd             5   │    ▸ lg-runner
-  2 ● load-generator  2   │  ▌ ✓ loadtest agent
-  3 ● noc             2   │    ▸ deploy
-  4 ● infra           3   │      ◍ terraform
- ─────────────────────────────────────────────────────────────────────
-  ~/code/load-generator · loadtest agent · claude · idle
-  tab needs you   r resume   ← → column   ↑ ↓ move   / search   ↵ switch
+╭──────────────────────────────────────────────────────────────────╮
+│   / tab for whoever needs you · / to search 2 blocked · 2 done   │
+├──────────────────────────────────────────────────────────────────┤
+│   WORKSPACES            │  ESD                         ◉1 ◍1 ●1  │
+│                         │                                        │
+│ ▎1 ◉ esd             3  │    ▸ agents                            │
+│  2 ◍ load-generator  1  │  ▌ ◉ claude: refactor auth             │
+│  3 ◉ noc             2  │    ● flaky test                        │
+│  4 ● infra           1  │    ◍ cargo watch                       │
+├──────────────────────────────────────────────────────────────────┤
+│   ~/code/esd · claude: refactor auth · claude · blocked          │
+│  tab needs you   r resume   ← → column   ↑ ↓ move   / search     │
+╰──────────────────────────────────────────────────────────────────╯
 ```
 
 ### Glass
@@ -65,18 +67,29 @@ The top-right corner is the headline: `1 blocked · 3 done` in red when someone'
 falling back to a plain pane count when nothing needs you. The active row gets a soft
 full-width highlight; counts align into a column; the focused workspace's `◉ ◍ ● ✓`
 rollup sits in its header; and a detail strip at the bottom shows the selected pane's
-path, agent, and status. Press `/` to search across every pane — matching its **name,
-its cwd, and its agent**, so `tf`, `~/infra`, or `claude` all work:
+path, agent, and status. Press `/` to search across every pane — matching its **name, its cwd, and its agent**,
+so `te`, `~/infra`, or `claude` all work. Matching is a plain substring over all three
+fields, and results are drawn from every workspace at once:
 
 ```
-  / tf                                               1 blocked · 3 done
- ─────────────────────────────────────────────────────────────────────
- ▌◍ terraform              infra ▸ deploy
-  ◉ tf-plan                infra ▸ tf-plan
- ─────────────────────────────────────────────────────────────────────
-  ~/infra · terraform · idle
-  type to filter   ↑ ↓ select   ↵ switch   esc back
+╭──────────────────────────────────────────────────────────────────╮
+│   / te▏                                     2 blocked · 2 done   │
+├──────────────────────────────────────────────────────────────────┤
+│ ▌ ● flaky test                                  esd ▸ agents     │
+│   ◍ loadtest agent                load-generator ▸ lg-runner     │
+│   ◉ terraform                                   noc ▸ deploy     │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+├──────────────────────────────────────────────────────────────────┤
+│   ~/code/esd · flaky test · claude · done                        │
+│         type to filter   ↑ ↓ select   ↵ switch   esc back        │
+╰──────────────────────────────────────────────────────────────────╯
 ```
+
+Both diagrams are the real renderer's output, not hand-drawn — `▎` marks the unfocused
+column's cursor, `▌` the focused one, and the panel keeps one size whether you're
+browsing or searching.
 
 ## Keys
 

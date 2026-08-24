@@ -119,7 +119,14 @@ impl NavState {
                     .unwrap_or(0)
             })
             .collect();
-        let mut st = NavState {
+        // Open where you are. Deck used to open *on the answer* — cursor parked on
+        // the first attention-queue item — but that makes Enter mean "go to whichever
+        // workspace has a blocked/done agent" rather than "go where I'm pointing",
+        // and nothing on screen said the cursor had been moved off you. Between two
+        // workspaces sharing a folder it was invisible: same path in the detail
+        // strip, different workspace on the other side of Enter. `tab` still walks
+        // the queue, and the top bar still counts who needs you.
+        NavState {
             active,
             sel,
             focus: Column::Rail,
@@ -127,13 +134,7 @@ impl NavState {
             query: String::new(),
             result_sel: 0,
             recent: Vec::new(),
-        };
-        // Open on the answer, not the map: if an agent is waiting on you, put the
-        // cursor there so Enter goes straight to it. Otherwise resume where you were.
-        if let Some(&loc) = attention_queue(deck).first() {
-            st.goto(deck, loc);
         }
-        st
     }
 
     /// Put the cursor on `loc`, in the pane column.
@@ -387,11 +388,15 @@ mod tests {
     }
 
     #[test]
-    fn starts_on_the_pane_that_needs_you_over_the_focused_workspace() {
-        // w2 is the focused workspace, but infra's w3:p1 is blocked — that wins.
+    fn opens_where_you_are_even_though_another_workspace_needs_you() {
+        // w2 is the focused workspace and infra's w3:p1 is blocked. The cursor must
+        // stay on w2: Enter means "go where I'm pointing", and moving the cursor off
+        // you silently turns a reflex Enter into a jump to a workspace you never
+        // chose — invisible when the two share a folder. `tab` is how you reach the
+        // queue.
         let st = NavState::new(&deck());
-        assert_eq!(st.active, 2);
-        assert_eq!(st.focus, Column::Panes);
+        assert_eq!(st.active, 1); // w2, where we are — not w3, which needs us
+        assert_eq!(st.focus, Column::Rail);
     }
 
     #[test]
@@ -561,14 +566,25 @@ mod tests {
     }
 
     #[test]
-    fn opens_on_the_first_attention_item_not_the_current_workspace() {
-        // w1 is the focused workspace, but w2:p1 is blocked — open there, in the
-        // pane column, so Enter goes straight to it.
+    fn opens_on_the_current_workspace_and_its_current_pane() {
+        // w1:p1 is where we are; w2:p1 is blocked. Open on w1, cursor on w1:p1.
         let d = triage();
         let st = NavState::new(&d);
-        assert_eq!(st.active, 1);
-        assert_eq!(st.sel[1], 0);
-        assert_eq!(st.focus, Column::Panes);
+        assert_eq!(st.active, 0);
+        assert_eq!(st.sel[0], 0);
+        assert_eq!(st.focus, Column::Rail);
+    }
+
+    #[test]
+    fn enter_on_open_goes_nowhere_new_rather_than_jumping_to_the_queue() {
+        // The regression this guards: opening Deck from one workspace and pressing
+        // Enter used to land you in whichever workspace had a blocked/done agent.
+        let d = triage(); // w1 is current; w2:p1 is blocked
+        let mut st = NavState::new(&d);
+        match st.on_key(&d, KeyCode::Enter) {
+            Outcome::Focus(FocusTarget::Workspace(id)) => assert_eq!(id, "w1"),
+            other => panic!("expected the workspace we came from, got {other:?}"),
+        }
     }
 
     #[test]
@@ -601,12 +617,27 @@ mod tests {
     fn tab_cycles_forward_through_the_attention_queue_and_wraps() {
         let d = triage();
         let mut st = NavState::new(&d);
-        // starts on the blocked pane (queue slot 0)
+        // opens where we are (w1:p1), off the queue
+        assert_eq!((st.active, st.sel[st.active]), (0, 0));
+        st.on_key(&d, KeyCode::Tab); // → blocked pane (queue slot 0)
         assert_eq!((st.active, st.sel[st.active]), (1, 0));
         st.on_key(&d, KeyCode::Tab); // → done pane in w1
         assert_eq!((st.active, st.sel[st.active]), (0, 1));
         st.on_key(&d, KeyCode::Tab); // wraps back to blocked
         assert_eq!((st.active, st.sel[st.active]), (1, 0));
+    }
+
+    #[test]
+    fn tab_moves_into_the_pane_column_so_enter_goes_to_that_pane() {
+        let d = triage();
+        let mut st = NavState::new(&d);
+        assert_eq!(st.focus, Column::Rail);
+        st.on_key(&d, KeyCode::Tab);
+        assert_eq!(st.focus, Column::Panes);
+        match st.on_key(&d, KeyCode::Enter) {
+            Outcome::Focus(FocusTarget::Pane(id)) => assert_eq!(id, "w2:p1"),
+            other => panic!("expected the blocked pane, got {other:?}"),
+        }
     }
 
     #[test]

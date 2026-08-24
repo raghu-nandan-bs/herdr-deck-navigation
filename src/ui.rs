@@ -18,8 +18,9 @@ fn natural_rail_width(deck: &Deck) -> u16 {
         .map(|w| w.label.chars().count())
         .max()
         .unwrap_or(8) as u16;
-    // chrome ≈ bar + " N " + "◉ " + name + "  NN"
-    name_w + 11
+    // chrome ≈ bar + " N " + "◉ " + name + "here  " + "  NN"
+    let tag_w = if deck.workspaces.iter().any(|w| w.is_current) { 6 } else { 0 };
+    name_w + 11 + tag_w
 }
 
 /// The rail gets the width its longest name needs, but never more than half the
@@ -281,10 +282,15 @@ fn render_rail(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Pa
         };
         let pc = workspace_panes(ws).len();
         let pc_str = format!("{pc}");
-        // budget: bar(1)+num(2)+dot(2)+name+pad+count+trailing(2)
-        let name_budget = w.saturating_sub(1 + 2 + 2 + pc_str.len() + 3);
+        // The workspace you're actually in. The cursor is free to be elsewhere, so
+        // without this there is nothing on screen tying any row to where you came
+        // from — and two workspaces on one folder are otherwise indistinguishable.
+        let tag = if ws.is_current { "here  " } else { "" };
+        let tag_w = tag.chars().count();
+        // budget: bar(1)+num(2)+dot(2)+name+pad+tag+count+trailing(2)
+        let name_budget = w.saturating_sub(1 + 2 + 2 + tag_w + pc_str.len() + 3);
         let name = truncate(&ws.label, name_budget);
-        let used = 1 + 2 + 2 + name.chars().count() + pc_str.len();
+        let used = 1 + 2 + 2 + name.chars().count() + tag_w + pc_str.len();
         let pad = w.saturating_sub(used + 2);
         let name_style = if active {
             Style::default().fg(p.text).add_modifier(Modifier::BOLD)
@@ -297,6 +303,7 @@ fn render_rail(frame: &mut Frame, area: Rect, deck: &Deck, st: &NavState, p: &Pa
             Span::styled(format!("{} ", ws.worst.glyph()), bg.fg(ws.worst.color(p))),
             Span::styled(name, name_style.patch(bg)),
             Span::styled(" ".repeat(pad), bg),
+            Span::styled(tag, bg.fg(p.overlay0)),
             Span::styled(pc_str, bg.fg(p.overlay0)),
             Span::styled("  ", bg),
         ]));
@@ -645,6 +652,23 @@ mod tests {
         assert!(s.contains("claude"), "detail strip shows agent:\n{s}");
     }
 
+    /// The rail must say which workspace you're actually in. Without it, nothing on
+    /// screen distinguishes the row you came from — fatal when two workspaces share
+    /// a folder, since the detail strip shows the same path for both.
+    #[test]
+    fn rail_marks_the_workspace_you_are_in() {
+        let s = draw(|st| st.active = 1, 90, 18);
+        let here = s
+            .lines()
+            .find(|l| l.contains("here"))
+            .expect(&format!("no here marker in rail:\n{s}"));
+        assert!(here.contains("esd"), "marker sits on the current workspace: {here}");
+        assert!(
+            !s.lines().any(|l| l.contains("load-generator") && l.contains("here")),
+            "marker must not be on the other workspace:\n{s}"
+        );
+    }
+
     #[test]
     fn search_mode_shows_filtered_results() {
         let s = draw(
@@ -977,3 +1001,6 @@ mod tests {
         assert!(row.contains("idle"), "status survives truncation:\n{row}");
     }
 }
+
+
+

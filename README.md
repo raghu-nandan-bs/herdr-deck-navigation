@@ -6,8 +6,8 @@ list that has no opinion about that. **Deck** does.
 
 - **`tab` walks the attention queue** — every blocked agent first, then everything that
   finished unseen, across all workspaces. Open, `tab`, `tab`, done.
-- **Deck opens on the answer**, not the map: if an agent is waiting on you, the cursor is
-  already there and `↵` goes.
+- **Deck opens where you are**, and marks that row `here`. `↵` always means *go where I'm
+  pointing* — so a reflex `↵` keeps you put, and `tab` is what takes you to whoever needs you.
 - **`r` resumes** — alt-tab back to the pane you were in before this one.
 - Browsing is still there when you want it: a **workspace rail**, a **focus pane** of the
   selected workspace's tabs & panes, and **`/` search** over every pane's name, path, and agent.
@@ -16,14 +16,14 @@ list that has no opinion about that. **Deck** does.
 ╭──────────────────────────────────────────────────────────────────╮
 │   / tab for whoever needs you · / to search 2 blocked · 2 done   │
 ├──────────────────────────────────────────────────────────────────┤
-│   WORKSPACES            │  ESD                         ◉1 ◍1 ●1  │
-│                         │                                        │
-│ ▎1 ◉ esd             3  │    ▸ agents                            │
-│  2 ◍ load-generator  1  │  ▌ ◉ claude: refactor auth             │
-│  3 ◉ noc             2  │    ● flaky test                        │
-│  4 ● infra           1  │    ◍ cargo watch                       │
+│   WORKSPACES                  │  ESD                   ◉1 ◍1 ●1  │
+│                               │                                  │
+│ ▌1 ◉ esd             here  3  │    ▸ agents                      │
+│  2 ◍ load-generator        1  │    ◉ claude: refactor auth       │
+│  3 ◉ noc                   2  │    ● flaky test                  │
+│  4 ● infra                 1  │  ▎ ◍ cargo watch          here   │
 ├──────────────────────────────────────────────────────────────────┤
-│   ~/code/esd · claude: refactor auth · claude · blocked          │
+│   ~/code/esd · cargo watch · working                             │
 │  tab needs you   r resume   ← → column   ↑ ↓ move   / search     │
 ╰──────────────────────────────────────────────────────────────────╯
 ```
@@ -108,10 +108,16 @@ browsing or searching.
 
 `Tab` cycles panes that want you, worst first: everything **blocked** (an agent is waiting
 on your input), then everything **done** (it finished and you haven't seen it). `working`
-and idle panes are deliberately skipped — they don't need you. When Deck opens, the cursor
-starts on the head of that queue, so the common case is `prefix+d`, `↵`.
+and idle panes are deliberately skipped — they don't need you. The common case is
+`prefix+d`, `tab`, `↵`. If nothing is blocked or done, `Tab` does nothing.
 
-If nothing is blocked or done, Deck opens where you left off and `Tab` does nothing.
+Deck opens on the workspace and pane you invoked it from, marked `here` in both columns —
+never on the queue. Parking the cursor on the queue head instead made `↵` mean "go to
+whichever workspace has a blocked agent" rather than "go where I'm pointing", with nothing
+on screen saying the cursor had been moved off you. Between two workspaces open on the
+*same folder* that was invisible — the detail strip showed the identical path either way,
+so `↵` quietly handed you the sibling workspace's tabs and panes. The count in the top bar
+still tells you someone is waiting; `tab` still takes one keystroke to get there.
 
 ### Resume
 
@@ -200,8 +206,9 @@ becomes blocked while you're looking joins the `tab` cycle.
 | unknown | `○` grey | plain shell |
 
 The same glyphs appear in the workspace rail, showing each workspace's **worst** agent
-state — so a blocked workspace is distinguishable without relying on colour. The pane
-you're currently sitting in is tagged `here`.
+state — so a blocked workspace is distinguishable without relying on colour. The workspace
+and the pane you're currently sitting in are both tagged `here`, which is the only thing
+on screen that tells apart two workspaces open on the same folder.
 
 ## Troubleshooting
 
